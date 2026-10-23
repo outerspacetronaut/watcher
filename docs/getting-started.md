@@ -1,175 +1,164 @@
-# Getting started: fork to first merged card in an afternoon
+# Getting started with GPT/Codex
 
-Fork this repo, set up one box, and watch it merge its first card. Read
-`docs/threat-model.md` first if you want to know exactly what the box can touch before you
-give it write access to anything — short version: a bot GitHub login and a Claude
-subscription token, nothing else, on a box you can rebuild if it ever misbehaves.
+Start with a small nonproduction project on a dedicated Linux runner. Read
+[threat-model.md](threat-model.md) before giving the bot access. The GPT adapter has
+offline tests and passing GitHub CI; a complete authenticated card-to-merged-PR pilot
+and GPT live replay parity remain unvalidated. This guide prepares that pilot, not a
+claim that unattended GPT operation is ready.
 
-Each step below says what to run and what tells you it worked. Steps marked **by hand**
-are not scripted on purpose (an account, a grant, a judgment call); everything else is one
-command.
+## 1. Check out the GPT revision
 
-## 1. Fork the repo
+The fork is [outerspacetronaut/watcher](https://github.com/outerspacetronaut/watcher).
+The initial integration is on `feat/codex-backend`, in
+[draft PR #1](https://github.com/outerspacetronaut/watcher/pull/1). Until it merges,
+check out that branch explicitly:
 
-**By hand:** fork this repo on GitHub, into your own account or org.
-
-```
-git clone <your fork's clone URL>
+```bash
+git clone https://github.com/outerspacetronaut/watcher.git
 cd watcher
+git switch feat/codex-backend
+python3 bin/test-codex-runner.py
 ```
 
-Your fork's `main` is what your box runs — `deploy/autodeploy.sh` ships whatever lands
-there by itself, so nothing after step 4 is a manual deploy.
+**Check:** `bin/codex-runner.py` exists and the adapter tests pass. A checkout of the
+original upstream or an older `main` does not contain the GPT adapter.
 
-**Check:** `git remote -v` shows your fork, not this one.
+## 2. Scope the GitHub identity and project files
 
-## 2. Make a bot GitHub account
+Use a dedicated bot GitHub account with write access only to the pilot repository
+and its Projects board. Keep repo administration on your own account.
 
-**By hand:** create a second GitHub account at `https://github.com/join` — never your own,
-and never share one across projects. This is the account that pushes branches, opens PRs,
-comments and merges. Give it write access to the repo you'll run it against (that repo's
-**Settings → Collaborators → Add people**).
+The tracked `projects/*.env` and `projects/*.detect.env` files describe Steve's
+upstream installation. Remove or replace those live configs in your deployment
+checkout before running the installer. Keep the `.env.txt` examples as references.
+The installer enables detector timers for every live detector config it finds;
+copying the upstream configs does not provision your own board.
 
-It will also own the board grants `deploy/add-project.sh` asks for in step 5 — nothing else
-to do here yet.
+**Check:** every live config names a repository, board, and path you control. See
+[projects/README.md](../projects/README.md).
 
-**Check:** nothing yet to run — step 4 confirms it's logged in on the box.
+## 3. Prepare the runner and sign in
 
-## 3. The Claude login
+Use a persistent Debian 12 VM or LXC with systemd (4 cores and 8 GB is the original
+setup), with no production credentials or unrelated personal files. As root, clone
+your prepared revision into `/opt/watcher`, then run:
 
-Your own Claude **subscription**, never a shared one.
-
-**By hand**, on a machine with a browser:
-
-```
-claude setup-token
-```
-
-It prints one token value. Put it into `/etc/watcher/env` on the box (step 4 creates that
-file) as:
-
-```
-CLAUDE_CODE_OAUTH_TOKEN=<the printed value>
-```
-
-Never set `ANTHROPIC_API_KEY` in that file — it would outrank the login and bill your API
-account instead of spending the subscription's own quota
-(`docs/how-it-works.md`, "The dollar figure is quota, not a bill"). Each tick can use up
-to `TICK_MAX_BUDGET_USD` of **imputed** quota (`bin/spawn.sh`, default $15) — a usage
-meter, not an invoice; nobody is billed per tick.
-
-**Check:** the command printed a token and no error. Step 4's check confirms it logged in
-for real.
-
-## 4. The box
-
-A Debian 12 VM or LXC with systemd, 4 cores, 8 GB, nothing else running on it. As root:
-
-```
-apt install git
-git clone <your fork's clone URL> /opt/watcher
+```bash
 /opt/watcher/deploy/bootstrap.sh
+npm install -g @openai/codex
 /opt/watcher/deploy/install.sh
 ```
 
-`deploy/bootstrap.sh` installs everything else the box needs (python3, curl, `gh`, a
-browser, Node 22, the Claude CLI) — idempotent, so re-running it after an interrupted or
-partial run only installs what is still missing. `deploy/install.sh` makes the `watcher`
-user, the systemd units, `/etc/watcher/env` and the floor page.
+Bootstrap still installs Claude Code as part of the original setup; Codex is the
+additional install above. The installer creates the `watcher` user, units,
+`/etc/watcher/env`, the floor service, and deployment/metrics timers. For the pilot,
+stop automatic deployment until the live validation path is ready:
 
-**Check:** `install.sh`'s own last lines. It prints `Next, by hand:` with a list, or
-`Nothing left by hand` once everything is set. Fill in what it lists — the token from
-step 3 goes in `/etc/watcher/env`; the bot's GitHub login goes in with
-`su - watcher; gh auth login; gh auth setup-git` — then run `/opt/watcher/deploy/install.sh`
-again. It is safe to re-run, and this time it should print `Nothing left by hand`.
-
-**Any Linux host with systemd will do.** Proxmox is what the original box runs on, and it
-is incidental: the repo never talks to it except for optional telemetry on the floor page.
-A cloud VM, a spare Mac mini or laptop running Debian, WSL2 on a desktop that stays on, or
-a guest on whatever hypervisor you already have all work exactly as written above. What the
-watcher does need is a machine that stays on, keeps its disk between restarts, and runs
-systemd: each lane is a systemd unit, the floor page is a service, the deployer and the
-detector are timers, and a deploy swaps a release folder under a running lane without
-killing the tick it is in the middle of (one can run for two hours). That is why there is
-no Docker image or Kubernetes chart yet. Containers are not a safety problem, since a
-container is more throwaway than a VM, but replacing a container kills the tick inside it,
-so a container build needs its own answer to "wait for the lane to be idle" first. If that
-is the shape you need, start with a VM so your first afternoon is about seeing a card
-merge, and file the port as a card once you have.
-
-## 5. First project
-
-From **your own machine**, never the box, authenticated as **yourself**:
-
-```
-BOT_LOGIN=<the bot's login from step 2> deploy/add-project.sh <name> <owner/repo>
+```bash
+systemctl stop watcher-deploy.timer
+su - watcher
+gh auth login
+gh auth setup-git
+codex login --device-auth
+codex login status
 ```
 
-It builds the board, then stops once and prints two things GitHub gives no API for —
-granting the bot access to the new board, and turning on the board's Auto-add workflow —
-and asks you to confirm you did both. Do them, answer yes, and it goes on to the labels,
-`main`'s branch protection and `projects/<name>.env`. Answering no, or piping it
-non-interactively, stops the script there; re-run the same command once both are done —
-everything it already built is left alone the second time.
+Complete ChatGPT sign-in with your own eligible account. The GitHub connection and
+login in this chat do not authenticate a separate runner. Codex manages the saved
+login; do not paste credentials into git or `/etc/watcher/env`. Optional Discord or
+Slack webhook URLs belong in `/etc/watcher/env`.
 
-```
-git add projects/<name>.env
-git commit -m "add <name>"
-git push
+**Check:** `gh auth status` names the bot and `codex login status` reports ChatGPT
+sign-in **as watcher**. The installer's missing `CLAUDE_CODE_OAUTH_TOKEN` reminder is
+legacy and does not apply to a Codex-only lane. Do not add a Claude token to clear it.
+Leave project lanes stopped while completing the next steps.
+
+## 4. Configure the first project for GPT
+
+On your own machine, authenticated as yourself, use the existing setup script:
+
+```bash
+BOT_LOGIN=<bot-login> deploy/add-project.sh <name> <owner/repo>
 ```
 
-On the box:
+The script creates a board and its required fields, links the repo, creates labels,
+and configures the named CI check and PR requirement. Optionally set
+`TEMPLATE_BOARD=<owner>/<number>` to copy an existing accessible board instead. It asks you to grant bot board access and enable Auto-add with
+`is:issue is:open`; copied boards do not carry that workflow across.
 
+The generated project file uses the legacy launcher defaults. **Before installing
+or starting the lane**, append these GPT settings to `projects/<name>.env`:
+
+```bash
+WATCHER_CLAUDE="${WATCHER_HOME:-/opt/watcher}/bin/codex-runner.py"
+TICK_MAX_TURNS=0
+TICK_MAX_BUDGET_USD=0
+TICK_TIMEOUT=30
+export WATCHER_CODEX_SANDBOX=workspace-write
 ```
+
+For manual configuration, [example-codex.env.txt](../projects/example-codex.env.txt)
+is a complete starter; fill in your real board and repo instead of appending the
+whole starter to an existing config. Use the correct absolute fallback if your
+install is not `/opt/watcher`. Every child lane must inherit these GPT settings.
+
+The adapter uses ChatGPT sign-in. It rejects nonzero Claude turn/dollar limits;
+the finite watchdog is the tick's time bound. `workspace-write` is the restricted
+default and can block git/network steps. Broader `danger-full-access` is an explicit
+choice for a dedicated runner. See [codex.md](codex.md) before changing it.
+
+## 5. Prepare project instructions and checks
+
+Before its first tick, fill in [templates/project-CLAUDE.md](../templates/project-CLAUDE.md)
+in the project's `CLAUDE.md`. Keep the exact phrase
+``required CI check is `<name>` ``: `bin/doctor.sh` reads it. Give Codex an `AGENTS.md`
+that points to that file, and create `docs/board.md` from
+[templates/board.md](../templates/board.md) using the actual board values printed by
+`add-project.sh`.
+
+Configure the project's review-receipt job and require it alongside its build check;
+`add-project.sh` does not install that second gate for you. Separate reviewer runs
+and exact-commit receipts remain mandatory. Project command overrides and custom
+agents must be checked for Claude-specific assumptions; they are not automatically
+converted by selecting GPT.
+
+Commit and push your project config and instructions. On the runner, as root:
+
+```bash
 /opt/watcher/deploy/install.sh <name>
-systemctl enable --now watcher@<name>
+su - watcher -c 'WATCHER_PROJECT=/opt/watcher/projects/<name>.env /opt/watcher/bin/spawn.sh --dry-run'
 ```
 
-**Check:** `journalctl -u watcher@<name> -n 20` shows it polling the board, and
-`install.sh`'s own output (it runs `bin/doctor.sh` for you) ends with `doctor: ok`.
+**Check:** doctor reports the correct board/checks, and dry-run's retained
+`claude command` label names `codex-runner.py` with both limits set to zero. Populate
+the project's required private inputs without committing secrets. Resolve warnings
+about the board or CI; the legacy Claude-token reminder is the exception above.
 
-## 6. The project's own CLAUDE.md
+## 6. Validate one card before unattended work
 
-Paste `templates/project-CLAUDE.md`'s section into the project's own `CLAUDE.md` and fill
-in every `<bracket>` — the required CI check's name most of all, in the exact phrase
-`required CI check is \`<name>\`` (backticks included): `bin/doctor.sh` greps for those
-exact words and warns when it can't find them.
+Choose a small, reversible pilot issue. With a single lane's default routing it can
+be unlabeled; when splitting lanes, configure a triage lane or give it the correct
+`agent:` label. Move it to **In progress**; `READY_PULL` stays off for this trial.
+Start just the configured pilot lane:
 
-**Check:** re-run step 5's `install.sh <name>`; `bin/doctor.sh`'s output carries no
-warning about the required check.
+```bash
+systemctl start watcher@<name>
+journalctl -u watcher@<name> -f
+```
 
-While you are in the project: give it a `docs/board.md` from `templates/board.md` (step
-5's `add-project.sh` printed the `sed` line that fills in the repo, the board's owner and
-its number). It is the page a session opens when you say "file a card" or "take a look at
-#n" — the commands, the labels, the body shape — so nobody rediscovers them per session.
+Watch `http://<runner-LAN-address>:8787/`. Verify the actual model completion,
+normalized result and token usage, separate reviews, current-SHA receipts, required
+checks, and resulting board state. Stop the lane after the trial. A timeout or failed
+model login is a failed pilot, even if offline checks passed.
 
-## 7. First card
+The existing live replay harness is Claude-specific and has not been ported to GPT.
+Do not bypass it with `DEPLOY_EVALS=0` or `deploy-anyway` to declare this integration
+ready. Complete the pilot and GPT replay work before enabling unattended lanes and
+automatic deployment. No runner was deployed as part of the fork/PR work.
 
-**By hand:** file an issue on the project's repo (through the board, or
-`gh issue create`). Label nothing. Move it to **In progress** — that column is the
-hand-off to the lane (`Ready` only gets pulled from by itself once `READY_PULL=1` is set
-in `projects/<name>.env`, which `deploy/add-project.sh` does not set for you).
+## 7. Answer a Stuck card
 
-Open the floor page: `http://<the box's address>:8787/`.
-
-**Check, in the first ten minutes:** the card's Stage field reaches **Claimed** within a
-couple of minutes of the move (the lane polls once a minute), then ticks through
-Building, Reviewing, Merging; the floor page shows
-the project's lane working, not idle; and the card gets a `🤖 **FYI:** plan for this card`
-comment before the Stage leaves Claimed.
-
-## 8. When a card lands in Stuck
-
-The bot needs a decision it can't make itself. Read the **first line** of its newest
-comment — that is the ask — then the lettered options under it.
-
-**By hand:** reply with a letter (or say which way you lean) on the card, then move it
-back to **In progress**.
-
-**Check:** the card leaves **Stuck - Needs help**; the lane picks it up again within a
-minute (`journalctl -u watcher@<name> -f`, or just watch the floor page).
-
----
-
-From here, `docs/how-it-works.md` is the map for anything you change in this repo, and
-`docs/owner-cheat-sheet.md` is the one page for whoever answers Stuck cards day to day.
+Read the newest comment's first line and lettered options. Reply on the card and
+move it back to **In progress** when ready to retry. A retry resets a parked card's
+attempt count. See [owner-cheat-sheet.md](owner-cheat-sheet.md) for daily operation
+and [how-it-works.md](how-it-works.md) for the loop's mechanics.

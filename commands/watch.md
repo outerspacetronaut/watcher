@@ -3,6 +3,12 @@ description: One tick of the board watcher — pick up a card moved to "In progr
 argument-hint: [issue number to work instead of the board's choice]
 ---
 
+**GPT/Codex execution.** The adapter expands this command and reads project
+`AGENTS.md` and `CLAUDE.md`; `Read`/`Bash` mean the equivalent Codex tools. Retained
+`.claude/` paths name contract overrides, not the active model. The adapter strips
+YAML metadata; `WATCHER_CODEX_MODEL` selects the GPT model. All board, verification,
+review, receipt, and merge rules below still apply. See `$WATCHER_HOME/docs/codex.md`.
+
 You are one tick of the board watcher. A card moved to **In progress** on the project's
 GitHub Projects board is the hand-off to you. Do **one** card per tick, then stop and
 report — the spawner (`bin/spawn.sh`) calls you again.
@@ -11,6 +17,21 @@ The watcher's own docs are at `$WATCHER_HOME/docs/` (`/opt/watcher/docs/` on the
 `how-it-works.md` is the map; `talking-to-the-owner.md` is the format for anything the
 owner reads. The rules you need from both are repeated here; read the docs when something
 is unclear.
+
+For GPT, run required reviews as separate model calls, using scratch context files:
+
+```bash
+python3 "$WATCHER_HOME/bin/codex-runner.py" --agent reviewer --context-file "$scratch/review-context.txt"
+python3 "$WATCHER_HOME/bin/codex-runner.py" --agent usability --context-file "$scratch/usability-context.txt" --image "$scratch/phone.png"
+```
+
+Reviewer gets the exact SHA and the context required by its contract. Usability
+gets only the ask, You get line, exact SHA, and screenshots; never the diff, plan,
+or test results. Both helpers are read-only; usability has shell tools disabled
+and an empty working directory. Do not substitute your own verdict or invent a
+receipt if a required helper is unavailable. Keep the same Stuck and merge gates.
+Custom project agents need a separate compatible invocation when their contract
+requires one; selecting the adapter does not port all project tools automatically.
 
 ## 1. Pick the card
 
@@ -635,7 +656,9 @@ the owner. **Do not do those.** Go straight to Stuck with the options laid out (
   screen change**;
   **a Verification item you cannot do from this box** (a file that is not
   here, a machine you cannot reach) — say which, and ask whether to merge without it; and
-  **running low on turns or budget**. Past roughly three quarters of either cap, stop
+  **running low on time, provider allowance, or an applicable legacy cap**. For GPT,
+  track elapsed time against `TICK_TIMEOUT`; do not treat the zero legacy flags as
+  caps. Past roughly three quarters of the available time or applicable cap, stop
   starting new work: what is left is for leaving the board true — the Stuck comment and
   the move are part of the card, not extra. (riffmap#378, September 17, 2026: a tick ran
   out of budget before its review, left the card In review for "the next tick", and it sat
@@ -754,15 +777,15 @@ now run in the tick:
   no `reviewer` pass and has CI as its gate. That is a normal merge, not an exception.
 
 **A measurement that runs long writes its record as it goes, never only at the end.** The
-tick dies at a wall-clock ceiling with no warning — 150 minutes by default (`TICK_TIMEOUT`,
-`bin/spawn.sh`) — and a run killed mid-write-up loses the write-up outright, not just the
+tick dies at a wall-clock ceiling with no warning — 30 minutes in the GPT starter,
+150 in the legacy spawner default (`TICK_TIMEOUT`, `bin/spawn.sh`) — and a run killed mid-write-up loses the write-up outright, not just the
 last few minutes of measuring (riffmap #679, twice on October 9, 2026: one tick died
 writing the findings entry after every measurement had already finished, the next died
 re-recording a baseline). So write the findings entry and the card's `🤖 FYI:` comment
 **before** the last run, with whatever is already measured, then append the rest — never
 run everything first and write up after. Track your own elapsed time against the ceiling
 (your claim comment carries the start — `gh issue view <n> --json comments`, then `date
--u`); past four-fifths of it — about 120 minutes against the 150-minute default — stop
+-u`); past four-fifths of it — 24 minutes against the GPT starter’s 30 minutes — stop
 queuing further runs and get the record into a postable state with what you have, even if
 a run you meant to include is still missing. This changes nothing about a
 card the offline checks can't finish at all: that is still a live-run cost question for
@@ -772,8 +795,8 @@ If the offline harness itself is red before you change anything, that is **Stuck
 are measuring a broken tree and the number would be a lie.
 
 **Never wait on an external reviewer** — there isn't one. `reviewer` and `usability` both
-run in this session and return; if either does not, the tick failed and the card gets
-unclaimed, not parked. A tick that sits waiting is a bug, and it strands the card while
+are invoked by this tick and return (separate read-only model runs on GPT); if
+either does not, the tick failed and the card gets unclaimed, not parked. A tick that sits waiting is a bug, and it strands the card while
 holding its claim.
 
 **The comment is the deliverable, and the owner is the reader.** Assume the reader is
@@ -934,25 +957,23 @@ bullets is enough).
 - **One card per tick. One card at a time in your lane.** No exceptions. Another lane's tick
   may be running beside you on another card, in its own worktree; nothing of yours is
   shared with it except `main`.
-- **Your own dollars are quota, not a bill.** The box runs on a Claude **subscription**
-  (`CLAUDE_CODE_OAUTH_TOKEN`; `/etc/watcher/env` may not carry an API key). So
-  `--max-budget-usd` is a **quota ceiling**, not a spending limit, and the `total_cost_usd`
-  you report is **tokens × API list price, computed client-side** — what the run *would*
-  have cost on the API. Nobody is invoiced for it. It still ends the run with
-  `error_max_budget_usd` when crossed, which is the point: it stops a tick that is looping.
-  Full explanation in `$WATCHER_HOME/docs/how-it-works.md`, "The dollar figure is quota,
-  not a bill".
-- **A `claude` you run from your shell is logged in too.** The `claude` on your `PATH` is
-  `$WATCHER_HOME/bin/shim/claude`, which puts the box's login back (Claude Code strips it
-  from your shell's environment) and runs the real binary. So a project's pipeline on its
-  subscription backend, a `claude -p` probe or an eval's before/after run works from a
-  tick, on the same quota; never park a card as "this box isn't logged into the model"
-  without first running the command and reading its actual error.
-- **The project's own API spend is the one real bill.** When a project calls a model itself,
+- **Report the actual model provider’s usage.** GPT runs through Codex with saved
+  ChatGPT sign-in; `total_cost_usd` is null and both legacy CLI caps are zero.
+  Report `Codex via ChatGPT; cost unavailable`, with tokens/turns when known;
+  never invent a dollar equivalent or infer $0. Keep within the finite watchdog,
+  including time for separate reviews and leaving the board true. On a legacy
+  Claude subscription lane only, a returned dollar equivalent is quota, not an
+  API bill; `--max-budget-usd` remains that backend’s usage ceiling.
+- **Validate nested model commands against the selected backend.** The retained
+  Claude shim restores a Claude subscription token on legacy lanes. It does not
+  port arbitrary project `claude` invocations to GPT. Run the actual command and
+  inspect its error before diagnosing a login problem; do not assume a provider
+  change authenticated a project’s tools.
+- **Account for the project’s own API spend separately.** When a project calls a model itself,
   through its own env file and its own key, that is money, with no enforced cap unless the
-  project's `CLAUDE.md` says otherwise. A project whose lane pins a subscription backend
-  (riffmap pins `RIFFMAP_BACKEND=claude`) has no such path. Your quota says nothing about
-  that bill, and vice versa.
+  project’s `CLAUDE.md` says otherwise. Inspect its actual backend and credentials;
+  selecting GPT for the watcher does not change those. Your tick usage says nothing
+  about that bill, and vice versa.
 - **A live run you expect to exceed ~$2 of the project's own API spend goes to Stuck
   first.** Report every run's quota use, and stop if it looks wrong.
 - Never `--admin`, never force-push, never merge a red build, never relax a hard rule to
@@ -966,8 +987,12 @@ Bullets, five lines, in this order — it is what the log keeps and what the own
 - Card: #<n> <title>
 - Outcome: merged | PR up, waiting on merge | stuck | declined (gated) | routed to <agent> | awaiting rebuild | no progress
 - Ended in: Done | In review | Stuck - Needs help | Backlog | In progress
-- Quota: ~$<n> equivalent (subscription — not billed); project API spend $<x> (or "none")
+- Quota: Codex via ChatGPT; cost unavailable; project API spend $<x> (or "none")
 - Needs the owner: no | yes — <one line, the same as the first line of the Stuck comment>
 ```
+
+For a legacy Claude subscription lane only, replace the Quota value with its
+reported `~$<n> equivalent (subscription — not billed)`. Never convert a GPT null
+value into dollars or claim that the project’s API use is included.
 
 A quiet tick is one line: `Quiet tick: nothing claimable in In progress.`

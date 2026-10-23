@@ -1,6 +1,13 @@
 # The owner's cheat sheet
 
-**You stock Ready. The bots do the rest.** One page, no code above the fold.
+**For a configured GPT runner:** move a pilot card to In progress and watch its
+progress on the floor page. Ready starts work automatically only when `READY_PULL=1`.
+
+This fork has not deployed a runner. The GPT adapter passed offline tests and CI;
+a complete live pilot and GPT replay parity remain pending. Finish
+[getting-started.md](getting-started.md) before unattended use. The operating notes
+below describe what a configured, validated installation provides. `riffmap` and
+upstream board links are examples, not your services.
 
 **The floor page** shows what every bot is doing right now, without asking anyone:
 `http://<your box>:8787/`. Each board reads left to right in the
@@ -58,10 +65,12 @@ look.
 
 - **Backlog** — yours. The bots never start anything from here. They will **put a card
   back** here if its own text says not to work it yet (see below).
-- **Ready** — **the bots' queue, since September 19, 2026.** When they have room they take
+- **Ready** — the bots’ queue **only with `READY_PULL=1`** (off in the GPT starter).
+  When configured and they have room they take
   the top card here by themselves and start it. Put a card in Ready when you want it done;
   you no longer have to hand it over one at a time.
-- **In progress** — work in flight. **Two cards at a time**, whoever put them there. Move a
+- **In progress** — work in flight. The self-pull ceiling is `WIP_MAX` (default 2);
+  cards moved here by hand are not blocked by that ceiling. Move a
   card here yourself to jump the line: a card you move by hand is always started before one
   the bots would have chosen.
 - **In review** — the bot's PR is finished and green but the merge did not go through. Nothing for you to do: after two hours the bots try once more, and if that fails the card comes to you in **Stuck** with the question. A card you drop here by hand, with no PR, is moved to **Stuck** within about ten minutes asking where you meant to put it.
@@ -70,10 +79,13 @@ look.
 
 ## How much runs at once
 
-- **Two cards in flight**, counted across all three lanes.
+- Each lane runs one card at a time. Lane routing determines how many run together.
+- `WIP_MAX` (default 2) limits promotion from Ready across the whole board; it does
+  not prevent a person from putting more cards in In progress.
 - When both slots are full, Ready waits — nothing is dropped, and nothing piles up.
 - A card that is parked in Stuck is not in flight, so it does not hold a slot.
-- **To stop the bots starting anything new**, empty Ready or pause a lane (last section).
+- **To stop new work**, pause every relevant lane (last section). Emptying Ready
+  alone does not stop work already queued in In progress or Waiting.
 
 ## Cards that say "not yet"
 
@@ -86,7 +98,10 @@ look.
   one.
 - To actually lift it: **edit that line out of the card**, then move it to Ready.
 
-## Three lanes
+## Three lanes (optional configuration)
+
+The following describes the upstream design/build/triage split. A new GPT starter
+is one lane until you create complementary lane files that inherit its GPT settings.
 
 - Design cards and build cards run **side by side**, one of each at a time.
 - The label decides the lane: `agent: architect` or `agent: designer` is the design lane.
@@ -158,7 +173,7 @@ a bug in the bots. Say so on the card and the next tick will fix the instruction
 | 🤖 **FYI:** this card waits on … | it is blocked by an open card; it starts when that closes | nothing, unless that card is not on its way |
 | 🤖 **FYI:** plan for this card | what the bot is about to build, in three lines, before it starts. **The first, `You get:`, is what you will end up with and where you open it** | nothing, unless `You get` is not what you asked for — then say so on the card |
 | 🤖 **FYI:** | information only | nothing |
-| 🤖 Watcher: the run ended without finishing | the tick died or ran out of budget; the card will be retried once | nothing, unless it happens twice |
+| 🤖 Watcher: the run ended without finishing | the tick died, timed out, or exhausted its provider allowance; the card will be retried once | nothing, unless it happens twice |
 | 🤖 Watcher: a run died while holding this card | cleanup after a crash | nothing |
 
 ## What the Discord messages mean
@@ -178,30 +193,21 @@ To turn it off, remove `DISCORD_WEBHOOK_URL` from `/etc/watcher/env` on the box 
 restart the unit. To get pinged on 🚨 only, set `DISCORD_MENTION` there to your Discord
 user mention (`<@your-id>`) or `@here`.
 
-## The watcher's own board
+## The watcher’s own board and deployments
 
-- **The watcher works its own cards too,** on the
-  [Watcher board](https://github.com/users/roloc/projects/2). Same columns, same rules.
-- **One card at a time** there, separate from riffmap's two.
-- **What it merges goes live by itself** once the checks pass — within about five minutes,
-  whatever any bot is doing at the time (next section).
-- **You never merge anything,** here or on RiffMap. The bots merge their own work once the
-  build check passes and the reviewer finds nothing blocking. Changes to their own safety
-  checks get the strictest review, and nothing goes live until its tests pass again.
+The [upstream Watcher board](https://github.com/users/roloc/projects/2) belongs to
+Steve’s installation. This fork has no configured board or running GPT lane. Create
+your own config before asking a bot to work the watcher’s own issues.
 
-## New watcher versions deploy themselves
+On a validated installation with `watcher-deploy.timer` enabled, the box checks
+`main` every five minutes, requires `verify` and the live replay gate, creates a
+release folder, and lets each lane follow it at its next idle poll. The floor’s
+Ship desk shows the release each lane uses. A held commit gets a Stuck card.
 
-- **You never deploy.** The box checks for a new version every five minutes.
-- It ships one only when **the build check passed** and **the bots' tests passed**. It
-  never pauses a bot or waits for one to finish a card — a version lands in its own folder,
-  and each bot picks it up on its own, between cards, so nothing it is doing is ever
-  interrupted.
-- **If a version fails its checks,** a card lands in **Stuck** saying which one. Move it to
-  **In progress** to have the watcher fix it, or add the **deploy-anyway** label to ship it.
-- **The floor page's Ship desk says which version each bot is running** — so if one still
-  shows an older one, it just has not finished its current card yet.
-- **To turn deploys off,** on the box: `systemctl stop watcher-deploy.timer` (`start` turns
-  them back on).
+The retained live replay harness still expects Claude. Keep automatic deployment
+off during the GPT pilot; do not use the legacy `deploy-anyway` override to skip
+missing GPT validation. Stop the timer with `systemctl stop watcher-deploy.timer`;
+only resume it after the integration and its live validation path are ready.
 
 ## How well the bots are doing
 
@@ -212,8 +218,10 @@ A report adds up what every past run already said about itself.
 - **Parked** — split two ways: parked by a bot with a real question for you, and parked
   because it tried the same card twice in a row and gave up either time.
 - **Died** — a run that crashed or ran out of room before it could finish.
-- **Turns and quota per shipped card** — the typical and the worst it took, in bot turns
-  and quota, to get one card all the way to Done.
+- **Turns per shipped card** — completed Codex turns on GPT lanes; not directly
+  comparable to legacy Claude turns. GPT dollar cost is unavailable, even where
+  the existing report retains a quota column. Read raw `usage` for token counts;
+  never interpret missing dollar values as free usage.
 - **Time from start to Done** — the typical and the worst wall-clock time, including any
   stretch a card spent sitting in Stuck waiting on you.
 
@@ -260,9 +268,9 @@ journalctl -u watcher@riffmap-triage -f
 journalctl -u watcher@watcher -f          # the watcher's own lane
 journalctl -u watcher-deploy -n 30        # what the deployer last did
 
-# what did the last tick say, and how much quota it used (not a bill — the box is on your subscription)
+# what did the last tick say, with provider and raw token usage (GPT dollars are unknown)
 ls -t ~watcher/.local/state/watcher/riffmap/logs/ | head
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("subtype"), "quota~$%s (not billed)" % d.get("total_cost_usd")); print(d.get("result"))' \
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("provider", "legacy"), d.get("subtype"), "usage:", d.get("usage"), "reported dollars:", d.get("total_cost_usd")); print(d.get("result"))' \
   ~watcher/.local/state/watcher/riffmap/logs/<newest>.json
 
 # the board from the command line

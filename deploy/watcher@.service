@@ -1,7 +1,8 @@
-# One watcher instance per project: `systemctl enable --now watcher@riffmap`.
-# /etc/watcher/env holds the Claude login token (CLAUDE_CODE_OAUTH_TOKEN) and, optionally,
-# the Discord webhook (DISCORD_WEBHOOK_URL, DISCORD_MENTION) — see bin/notify.py. It must
-# NOT export ANTHROPIC_API_KEY — the key outranks the login and would bill the API.
+# One watcher instance per project: `systemctl enable --now watcher@<name>`.
+# /etc/watcher/env holds optional notification webhooks and legacy Claude token settings.
+# GPT lanes use Codex's saved ChatGPT sign-in as watcher, not a token in this file.
+# Select the Codex adapter and zero legacy CLI caps in projects/<name>.env; docs/codex.md.
+# Legacy Claude lanes must not set ANTHROPIC_API_KEY here (separately billed API login).
 [Unit]
 Description=Board watcher for %i
 After=network-online.target

@@ -1,19 +1,21 @@
 # The board — how cards are made, read and moved
 
-The board is GitHub Projects <https://github.com/users/roloc/projects/2> (board number 2,
-owner `roloc`); every card is an issue in `roloc/watcher`. This is the one page for the
-mechanics — `templates/board.md` filled in for this board, the same page every project
-on the watcher gets — so a session
-told "file a card" or "take a look at #n" knows what to run without going to look. The
-owner watches the board, Discord and the floor page, not chat, so anything that needs them
-is a card here.
+This fork’s repository is `outerspacetronaut/watcher`. **No Projects board or GPT
+lane has been provisioned for it.** Configure your own board and live project env
+file using [getting-started.md](getting-started.md) before using `board.py`.
+
+The original [roloc board](https://github.com/users/roloc/projects/2) and linked
+historical issues belong to upstream. Do not file or move cards there as part of
+setting up this fork. The commands below target this fork; replace `<board-owner>`,
+`<board-number>`, `<project-name>`, and `<owner-login>` with your actual setup.
+Board operations are provider-independent; GPT setup is in [codex.md](codex.md).
 
 ## Reading a card ("take a look at #n")
 
 One call gives the whole card: body, every comment, labels, and which column it is in.
 
 ```bash
-gh issue view <n> -R roloc/watcher --json title,state,labels,body,comments,projectItems
+gh issue view <n> -R outerspacetronaut/watcher --json title,state,labels,body,comments,projectItems
 ```
 
 - **The ask is the body's first line** — unless the owner commented later. **The owner's
@@ -24,7 +26,7 @@ gh issue view <n> -R roloc/watcher --json title,state,labels,body,comments,proje
 - **The column** is `projectItems[].status.name` (Backlog, Ready, In progress, In review,
   Done, Stuck - Needs help). A card with no `projectItems` is an issue nobody put on the
   board; see "Filing".
-- **A Stuck card's question** is its newest `Needs @roloc:` comment. `python3 bin/board.py
+- **A Stuck card's question** is its newest `Needs @<owner-login>:` comment. `python3 bin/board.py
   ask <n>` prints that one line, `images <n>` the pictures under its `Look:` section. The
   owner answers by replying on the card and moving it back to In progress; a `steve-decision`
   card ends when the owner's part is done.
@@ -32,14 +34,14 @@ gh issue view <n> -R roloc/watcher --json title,state,labels,body,comments,proje
   card: a desk per lane, and Peek for the tick's own session. `in-flight` on the card means
   a tick holds it right now; never add or remove that label by hand from a Mac session
   (`bin/board.py unclaim <n>` is for a leaked one, after the tick is gone).
-- **Its PR**, if any: `gh pr list -R roloc/watcher --search "<n> in:body" --state all`
+- **Its PR**, if any: `gh pr list -R outerspacetronaut/watcher --search "<n> in:body" --state all`
   (a tick's PR says `Closes #<n>`).
 
 `bin/board.py show <n>` (live, bypasses the cache) and `list "<column>"` need the lane's
 env for the board's owner and number:
 
 ```bash
-set -a; source projects/watcher.env; set +a; python3 bin/board.py show <n>
+set -a; source projects/<project-name>.env; set +a; python3 bin/board.py show <n>
 ```
 
 Never list the whole board to find one card — `gh issue view --json projectItems` is
@@ -52,24 +54,24 @@ Write the body in a scratch file and pass `--body-file`: bodies are long and ful
 backticks. Then one command:
 
 ```bash
-gh issue create -R roloc/watcher --title "<what ships, in one line>" --body-file card.md
+gh issue create -R outerspacetronaut/watcher --title "<what ships, in one line>" --body-file card.md
 ```
 
-**This board's Auto-add workflow is on**, so a new issue lands in **Backlog** by itself
-(the weekly hygiene card is filed with `gh issue create` alone and arrives there). Confirm,
+**Enable Auto-add** with `is:issue is:open` on your own board during setup so new
+issues land in **Backlog**. This fork has no preconfigured Auto-add workflow. Confirm,
 because a card that is not on the board is invisible to the lane:
 
 ```bash
-gh issue view <n> -R roloc/watcher --json projectItems --jq '.projectItems[].status.name'
+gh issue view <n> -R outerspacetronaut/watcher --json projectItems --jq '.projectItems[].status.name'
 ```
 
 If that prints nothing, put it on by hand:
-`gh project item-add 2 --owner roloc --url https://github.com/roloc/watcher/issues/<n>`.
+`gh project item-add <board-number> --owner <board-owner> --url https://github.com/outerspacetronaut/watcher/issues/<n>`.
 
 **It stays in Backlog unless the owner says otherwise.** Backlog is never pulled from; it
 is where a card waits for the owner to move it. "Put it in Ready" is
 `python3 bin/board.py move <n> Ready` (with the env sourced, above) — and on this board
-**Ready is the lane's queue** (`READY_PULL=1`): the lane promotes the top Ready card to In
+**Ready becomes the lane’s queue only with `READY_PULL=1`** (off in the GPT starter): the lane promotes the top Ready card to In
 progress and starts on it the next time nothing is in flight, so moving a card there is
 starting the work, not scheduling it.
 
@@ -77,14 +79,14 @@ starting the work, not scheduling it.
 owner, the field is what the lane reads before it picks any card:
 
 ```bash
-id="$(gh api repos/roloc/watcher/issues/<m> --jq .id)"
-gh api -X POST repos/roloc/watcher/issues/<n>/dependencies/blocked_by -F issue_id="$id"
+id="$(gh api repos/outerspacetronaut/watcher/issues/<m> --jq .id)"
+gh api -X POST repos/outerspacetronaut/watcher/issues/<n>/dependencies/blocked_by -F issue_id="$id"
 ```
 
 ### Labels
 
-This board has one lane and no `agent:` labels: the `watcher@watcher` lane takes every
-card. The labels that mean something:
+A single lane with no `LANE_AGENTS` filter takes every card. If you add lanes,
+configure complementary filters and triage routing first. The labels that mean something:
 
 | label | meaning |
 |---|---|
@@ -128,7 +130,7 @@ question, lettered options, how to answer.
 The owner moves cards on the board. From a session, `python3 bin/board.py move <n>
 "<column>" [--why "<one line>"]`; `stage <n> "<stage>"` sets the Stage (`-` empties it).
 A move to Stuck is the one move that reaches Discord, and it carries the card's newest
-`Needs @roloc:` comment (or `--why`), so write that comment first. Every other move is
+`Needs @<owner-login>:` comment (or `--why`), so write that comment first. Every other move is
 silent; the floor page shows it. A session on a Mac has no reason to move a card except
 on the owner's word — which card a lane gets is the spawner's decision, and
 `docs/how-it-works.md`, "Hard rules for every agent", is the list of what a tick never does

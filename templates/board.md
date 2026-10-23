@@ -1,4 +1,9 @@
 <!--
+
+Board operations are the same on GPT/Codex and legacy Claude lanes. Fill in this
+project’s actual board values; the template does not provision a board or choose a
+model backend. Configure GPT separately using the watcher’s `docs/codex.md`.
+
 The one page a project keeps for its board: how a card is filed, read and moved, and the
 body shape its cards use. Copy it to the project's docs/board.md and fill in every
 <bracket> — deploy/add-project.sh prints the sed line that fills the three it knows

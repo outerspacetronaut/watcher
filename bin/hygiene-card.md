@@ -22,8 +22,10 @@ of a weekly finding: say so in a comment here and file that card.
 
 **Verification.** `bin/hygiene.sh` exits 0 on `main` after the merge (by hand, export
 `GITHUB_REPOSITORY=<owner>/<repo>` first, or run it with `--no-remote`). Every offline
-suite in `.github/workflows/ci.yml` stays green. Nothing here touches what a model reads,
-so the deployer ships it without the replay suite, by itself, once the lanes are idle.
+suite in `.github/workflows/ci.yml` stays green. If the diff touches what a model reads, its replay gate still applies; a hygiene
+label does not exempt it. On a configured, validated deployment, the deployer ships
+only after the applicable gates pass; lanes follow at their next idle poll. The
+GPT draft still needs its live validation path before unattended deployment.
 
 **Where to look when it is done** (the Done comment names it): this card — the merged PR
 linked from it, and the comment listing every branch deleted. Nothing on the floor page.
