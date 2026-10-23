@@ -14,6 +14,18 @@ though a human reading the file would say it obviously does.
 
 ## Running under the watcher
 
+- **GPT/Codex entry point.** Keep this section in `CLAUDE.md` for the watcher’s
+  existing readers, and add a project `AGENTS.md` directing Codex to read it. A GPT
+  lane must select `codex-runner.py`, set `TICK_MAX_TURNS=0` and
+  `TICK_MAX_BUDGET_USD=0`, and keep a finite `TICK_TIMEOUT`; see the watcher’s
+  `docs/codex.md`. Export `WATCHER_CODEX_MODEL` to pin an available GPT model.
+  Retained `.claude/` command/agent paths are compatibility paths, not a provider
+  choice. Audit any project overrides or explicit `claude` invocations separately.
+- **Model accounting.** GPT ticks use the watcher user’s saved ChatGPT login.
+  Their dollar cost is unavailable (`total_cost_usd=null`); report tokens/turns
+  when known, never invent a subscription dollar equivalent. A project’s own
+  API calls and credentials are separate and must be accounted for independently.
+
 - **The required CI check is `<name>`.** <Run its test suite(s) locally before pushing —
   name the command(s).> A red check you could have caught in a few seconds locally is a
   wasted round trip.
@@ -81,7 +93,7 @@ though a human reading the file would say it obviously does.
   guessing. Delete this bullet if the project has none.>
 
 - **Quota vs. real spend.** <If the project calls a model itself, through its own key or
-  backend (not the watcher's own subscription token), say so and name the env var that
+  backend (separate from the watcher’s saved model login), say so and name the env var that
   pins it (riffmap: `RIFFMAP_BACKEND=claude`). If it pins a subscription backend with no
   metered path, say that instead — `watch.md`'s "$2 of real spend goes to Stuck first" rule
   only bites when there is a real bill to worry about. Delete this bullet if the project

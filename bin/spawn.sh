@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 #
+# GPT/Codex fork: set WATCHER_CLAUDE to bin/codex-runner.py in each project, set
+# both legacy CLI limits to 0, and retain a finite watchdog. Claude remains the
+# runtime default described below. GPT auth/sandbox/accounting differ; see
+# docs/codex.md and docs/threat-model.md for the current provider-specific contract.
+#
 # The watcher's spawner: a systemd-kept-alive loop with no Claude session of its own. It
 # polls one project's board once a minute and starts `claude -p "/watch <n>"` only when a
 # claimable card exists. One spawner that refuses to start a second tick while one runs IS

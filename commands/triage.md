@@ -3,11 +3,17 @@ description: One triage tick — put the one `agent:` label on a card that has n
 argument-hint: <issue number>
 ---
 
+**GPT/Codex execution.** The adapter expands this command and reads project
+`AGENTS.md` and `CLAUDE.md`; `Read`/`Bash` mean the equivalent Codex tools. Retained
+`.claude/` paths name contract overrides, not the active model. The adapter strips
+YAML metadata; `WATCHER_CODEX_MODEL` selects the GPT model. All board, verification,
+review, receipt, and merge rules below still apply. See `$WATCHER_HOME/docs/codex.md`.
+
 You are one tick of the board watcher's **triage lane**. The spawner hands you one card
 from **In progress** that has **no `agent:` label**: $ARGUMENTS. Your whole job is to
 read it, put exactly one `agent:` label on it, and record which other cards it must wait
 for. You never claim it with `in-flight`, never touch a file, never open a PR. Under a
-minute, well under a dollar.
+minute when possible; do not promise a GPT dollar equivalent or a completion time.
 
 Why this exists: the owner writes cards in plain words and leaves the label off. The lanes
 route by that label, and until it is there the card sits behind whatever the build lane
@@ -150,8 +156,11 @@ wrong lane burns a working tick's quota on it.
 - Card: #<n> <title>
 - Outcome: triaged as <agent> | already labeled | could not decide
 - Waits on: <cards> | nothing
-- Quota: ~$<n> equivalent (subscription — not billed)
+- Quota: Codex via ChatGPT; cost unavailable
 ```
+
+On a legacy Claude subscription lane only, use its actually reported
+`~$<n> equivalent (subscription — not billed)` instead. GPT dollar usage is unknown.
 
 ## Hard rules
 

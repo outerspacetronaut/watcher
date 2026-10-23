@@ -1,33 +1,49 @@
-# watcher
+# Watcher — GPT/Codex fork
 
-**GPT / OpenAI Codex support in this fork:** an opt-in launcher adapter keeps the
-existing board loop and Claude default. See [Run Watcher with Codex](docs/codex.md)
-for ChatGPT sign-in, project configuration, tests, and current validation limits.
+A headless board-to-PR loop, adapted to run GPT through the OpenAI Codex CLI using
+ChatGPT sign-in. One dedicated Linux runner, one systemd unit per lane. This fork
+comes from [Steve Rodda's watcher](https://github.com/roloc/watcher).
 
-A headless Claude Code loop that turns a GitHub Projects board into merged pull requests.
-One throwaway box, one systemd unit per project, no permission prompts.
-**New here?** `docs/getting-started.md` is fork to first merged card, in an afternoon;
-`docs/threat-model.md` is what the box can touch before you give it write access to
-anything.
+**Start with [Getting started with GPT](docs/getting-started.md).**
+[The documentation review](docs/documentation-audit.md) records the migration scope.
+[The Codex guide](docs/codex.md) covers authentication, configuration, reviews,
+logs, and limits; [the threat model](docs/threat-model.md) explains the access.
 
-**How it works.** `bin/spawn.sh` polls the board's **In progress** column once a minute, and
-falls back to the **Waiting** stage and then — where `READY_PULL=1` — the **Ready** column,
-so the loop can start a card nobody handed it. When
-a card is claimable it creates a git worktree for it and runs one tick:
-`claude -p "/watch <n>" --dangerously-skip-permissions --max-turns 400 --max-budget-usd 15`.
-The tick claims the card, does the work in the worktree, opens a PR, waits for CI, runs
-the review passes (`usability` first on a screen change, then `reviewer`), merges, and
-moves the card to **Done**; anything it cannot decide goes to
-**Stuck - Needs help** with the options written on the card. Two failed attempts park the
-card. The spawner is also the stale-claim sweeper.
+The adapter is opt-in: `bin/spawn.sh` still defaults to Claude unless the project
+sets `WATCHER_CLAUDE` to `codex-runner.py`. The variable name and `.claude/` paths
+remain compatibility interfaces. This branch's integration is in
+[draft PR #1](https://github.com/outerspacetronaut/watcher/pull/1). Offline adapter
+coverage and GitHub CI pass; a completed live GPT card-to-merge pilot and GPT replay
+parity are still pending. No runner has been deployed for this fork.
 
-**Why a box.** Skipping permissions is only safe where there is nothing to protect. The box
-holds a bot GitHub login, a Claude subscription token, and a checkout. If a tick misbehaves,
-rebuild the box. On a developer's own machine the same loop needs allow lists, trust
-probes and a classifier, and the day that was tried it cost more than the feature work.
+**How it works.** The spawner polls **In progress**, then **Waiting**, then
+**Ready** when `READY_PULL=1`. It creates a worktree and invokes the configured
+launcher for `/watch <n>`. A GPT project selects it with:
+
+```bash
+WATCHER_CLAUDE="${WATCHER_HOME:-/opt/watcher}/bin/codex-runner.py"
+TICK_MAX_TURNS=0
+TICK_MAX_BUDGET_USD=0
+TICK_TIMEOUT=30
+export WATCHER_CODEX_SANDBOX=workspace-write
+```
+
+The adapter expands the command into `codex exec`. The tick works one card, opens
+a PR, waits for CI, gets separate review passes (`usability` first for a screen
+change, then `reviewer`), and merges only when the required gates pass. Unresolved
+decisions go to **Stuck - Needs help**; two failed attempts park the card.
+
+**Why a dedicated box.** Ticks run without interactive approvals. A runner holds a
+scoped bot GitHub login and a saved ChatGPT/Codex login. Its sandbox may need broader
+access for git and network operations. Keep unrelated credentials and production
+resources off it; rebuilding a box does not undo remote actions. See the threat model.
 
 ## Layout
 
+    bin/codex-runner.py   GPT/Codex launcher and separate read-only review helpers
+    bin/test-codex-runner.py  offline adapter contract tests
+    docs/codex.md         ChatGPT sign-in, GPT configuration, logs and validation limits
+    AGENTS.md             Codex entry point; routes to the maintained CLAUDE.md rules
     bin/spawn.sh          the loop (systemd runs it); --dry-run / --once
     bin/board.py          the board CLI: list/show/move/stage/unclaim/notify/dump/ask (BOARD_OWNER, BOARD_NUMBER)
     bin/notify.py         Discord or Slack: posts through a webhook (DISCORD_WEBHOOK_URL and/or SLACK_WEBHOOK_URL) when a card is stuck or something broke; bin/test-notify.py checks the shapes
@@ -48,7 +64,7 @@ probes and a classifier, and the day that was tried it cost more than the featur
     bin/test-floor-browser.py  the floor page loaded and clicked in that browser; also the worked example of a suite built on it
     bin/test-spawn.sh     the spawner's cases, no network, every external command stubbed
     bin/test-detect.sh    the detector's cases, offline, every external command stubbed
-    .github/workflows/ci.yml  `verify`: both suites plus a syntax pass, on every PR (see below)
+    .github/workflows/ci.yml  `verify` suites and the separate `review-receipt` gate
     commands/watch.md     the /watch contract, installed for the watcher user (all projects)
     commands/triage.md    one triage tick: label an unlabeled card, record what it waits on, stop
     agents/reviewer.md    the last review pass: blocking findings only, one round
@@ -61,10 +77,10 @@ probes and a classifier, and the day that was tried it cost more than the featur
                           WORKTREE_COPY_DIRS, and LANE_AGENTS for a lane
     deploy/bootstrap.sh   idempotent apt/npm setup for a fresh box, run once before install.sh
     deploy/watcher@.service, deploy/install.sh
-    deploy/autodeploy.sh  THE deploy path: ships main by itself when every lane is idle (see below)
+    deploy/autodeploy.sh  ships validated main releases; lanes follow at their next idle poll
     deploy/watcher-deploy.service, .timer   run it every five minutes
     deploy/watcher-floor.service  the floor page's unit; install.sh restarts it on every install
-    deploy/rollout.sh     the manual fallback, for a Claude session (see below)
+    deploy/rollout.sh     the manual fallback, for an operator agent session (see below)
     bin/test-deploy.sh    the deployer's cases, offline, every external command stubbed
     deploy/watcher-detect@.service, .timer  bin/detect.sh, per project, opt-in (see below)
     projects/<name>.detect.env   opt-in per-project config for bin/detect.sh (see below)
@@ -175,48 +191,24 @@ for every box, then enables an instance for every `projects/<name>.detect.env` i
 merging that file, on a rerun of `install.sh` or the next deploy, is what turns detection
 on. Details in `docs/how-it-works.md`, "Watching the product".
 
-## Set up a box (Debian 12 LXC, unprivileged, 4 cores / 8 GB)
+## Set up a GPT runner
 
-`docs/getting-started.md` is the numbered, step-by-step version — fork, bot account,
-your own Claude subscription token, the box, a first project, a first card. Short form:
+Follow [getting-started.md](docs/getting-started.md) in order: check out the GPT
+revision, replace the upstream live project configs, scope the bot identity, prepare
+a dedicated systemd Linux host, install `@openai/codex`, and sign in **as watcher**
+with `codex login --device-auth`.
 
-    apt install git
-    git clone <your fork's clone URL> /opt/watcher   # or rsync it in
-    /opt/watcher/deploy/bootstrap.sh               # idempotent: git, python3, curl, gh,
-                                                    # chromium, node 22, the claude CLI
-    /opt/watcher/deploy/install.sh                 # user, unit, /etc/watcher/env, symlinks, `board`
+The bootstrap still installs Claude Code; a GPT lane needs no Claude token. The
+installer still prints a legacy missing-token reminder. Set the adapter and zero
+Claude-specific limits in every project before starting it, prepare `CLAUDE.md` and
+`AGENTS.md`, and check `WATCHER_PROJECT=projects/<name>.env bin/spawn.sh --dry-run`. The printed label still says
+`claude command`, but the executable must be `codex-runner.py`.
 
-Then by hand, once:
-
-1. **Claude login:** on a machine with a browser run `claude setup-token`, and put the printed
-   value in `/etc/watcher/env` as `CLAUDE_CODE_OAUTH_TOKEN=…`. That file must not set
-   `ANTHROPIC_API_KEY` — the key outranks the login and would bill the API instead.
-   `DISCORD_WEBHOOK_URL=…` and/or `SLACK_WEBHOOK_URL=…` go in the same file if you want
-   the channel (see above).
-   That one file logs in the tick *and* anything the tick runs from its shell: Claude Code
-   strips the token from every Bash tool call's environment, so `bin/shim/claude` — first
-   on the tick's `PATH` — reads it back from this file before exec'ing the real binary.
-2. **GitHub:** `su - watcher`, `gh auth login` as the bot account, `gh auth setup-git`. The bot
-   needs write access to the repo and access to the Projects board.
-3. **Project:** `BOT_LOGIN=<the bot's login> deploy/add-project.sh riffmap yourorg/riffmap`
-   (from your own machine, see "Add a project" below) sets up the board, the labels, and
-   `projects/riffmap.env`; commit and push that file, then `deploy/install.sh riffmap`
-   clones the repo under `/home/watcher/projects/` and drop its `.env.local` and any
-   private inputs in place.
-4. **Start:** `systemctl enable --now watcher@riffmap watcher@riffmap-design
-   watcher@riffmap-triage` (the build, design and triage lanes — without the triage lane
-   an unlabeled card is nobody's); `journalctl -u watcher@riffmap -f` follows one.
-   The watcher's own lane is `watcher@watcher` (`deploy/install.sh watcher` first); see
-   `docs/how-it-works.md`, "The watcher's own board".
-   Pause a lane with `touch ~watcher/.local/state/watcher/riffmap/PAUSE`.
-5. **The floor page** is already up (`deploy/install.sh` starts `watcher-floor.service`
-   the first time it runs, before any project is even cloned): `http://<this box's LAN
-   address>:8787/`, reached off-site over whatever tunnel already reaches the box.
-   `journalctl -u watcher-floor -f` follows it; `systemctl restart watcher-floor` after
-   hand-editing `bin/floor.py` outside the normal deploy path.
-
-**What this box can and cannot do** is `docs/threat-model.md` — read it before granting
-the bot account write access to anything.
+`deploy/install.sh` starts the floor service and enables deployment/metrics timers;
+stop automatic deployment for the pilot. Keep the existing replay and review gates.
+A manual nonproduction pilot and GPT replay parity are prerequisites to unattended
+operation. The [complete starter](projects/example-codex.env.txt) contains the GPT
+settings; [codex.md](docs/codex.md) explains sandbox choices and usage accounting.
 
 ## Looking at pages
 
@@ -240,35 +232,26 @@ have to build the means each time. So the browser comes with the box:
   the command that serves a branch's version (`templates/project-CLAUDE.md`, "Looking at a
   screen"). A project that wants its page run in its **own CI** copies `bin/browse.py`
   (one file) and writes a suite like `bin/test-floor-browser.py`.
-- **The replay suite holds it in place:** `evals/cases/page-symptom-is-run-in-a-browser.sh`
+- **The existing Claude live replay covers this rule:** `evals/cases/page-symptom-is-run-in-a-browser.sh`
   hands a tick a bare project with a broken page and no browser tool of its own, and fails
   unless the tick ran the page in the browser and the page on `main` draws afterward.
 
 ## CI
 
-`.github/workflows/ci.yml`, one job — `verify`: `bash -n` over the scripts systemd and the
-installer run, then `bin/test-spawn.sh` and `bin/test-notify.py`. Both suites are offline
-and stubbed, so the job needs no network, no secrets and no services, and takes seconds.
+[ci.yml](.github/workflows/ci.yml) has two jobs: `verify` runs shell syntax checks,
+the Python/bash offline suites (including the Codex adapter), and the floor's real
+browser suite; `review-receipt` checks the PR's receipts against its current head.
+The browser suite may install a browser. These checks need no model credentials;
+they do not prove a GPT model completed a card.
 
-**Where it runs.** PR code is code any branch can write, so it never runs on a box that
-holds credentials — riffmap's split (its `ci.yml`, riffmap
-[#407](https://github.com/roloc/riffmap/issues/407)), which here rules out exactly one box:
-the `agents` LXC this repo deploys to, holding the bot's GitHub login and a Claude
-subscription token. The repo variable `CI_RUNNER` picks the runner. It is **`watcher-ci`**
-(since September 28, 2026): the `ci-watcher` runner on the `ci` LXC (108), in
-`/opt/actions-runner-watcher` beside riffmap's, run by the same `gha-runner` user. It needs
-nothing beyond bash and python3.
+`CI_RUNNER` selects an optional dedicated CI runner; unset it for GitHub-hosted
+execution. Keep untrusted PR code off the operational runner that holds GitHub and
+model credentials. Upstream's `watcher-ci` registration is not this fork's runner.
+Do not copy that setting unless you register and operate your own suitable runner.
 
-- **Each repo needs its own runner registration.** Repos in a user account cannot share
-  runners, so riffmap's `riffmap-ci` never picks up this repo's jobs; pointing
-  `CI_RUNNER` at it queues every check, and with `verify` required, nothing merges.
-- **If the ci box is down**, unset the variable (`gh variable delete CI_RUNNER`) and the
-  job falls back to GitHub-hosted until it is back. That costs metered minutes, so set it
-  again as soon as the box is up.
-- Never point it at the agents box.
-
-Deploying is deliberately not a CI job: it would need a runner on the agents box. CI's
-`verify` is instead the first thing the box's deployer checks — see below.
+Deployment is separate from CI. On an installed runner, the deployer requires
+`verify` and the existing live replay gate. That harness is still Claude-specific;
+GPT replay parity remains follow-up work, not a gate to switch off.
 
 ## The weekly hygiene card
 
@@ -304,7 +287,7 @@ set — GitHub Actions sets the latter itself, so export it by hand for a local 
 
 ## Deploys happen by themselves
 
-**Nobody runs a deploy.** `watcher-deploy.timer` runs `deploy/autodeploy.sh` every five
+**After a runner is configured and validated,** `watcher-deploy.timer` runs `deploy/autodeploy.sh` every five
 minutes on the box (as root; everything git and GitHub it does as the watcher user). Each
 run is one step, idempotent, so an interrupted one is picked up by the next:
 
@@ -349,7 +332,7 @@ State is in `/var/lib/watcher-deploy/`. Knobs (environment on the unit): `DEPLOY
 (`ln -sfn /opt/watcher-releases/<sha> /opt/watcher`) — the sweep's "keep the newest two"
 is exactly what keeps one there to point back at.
 
-**The manual fallback**, for a Claude session when the deployer itself is broken or to try
+**The manual fallback**, for an operator agent session when the deployer itself is broken or to try
 a branch on the box before it merges — never for the owner:
 
     /opt/watcher/deploy/rollout.sh riffmap            # main
@@ -384,10 +367,13 @@ workflow with the filter
 board whose filter is still GitHub's own `label:bug` example silently adds no cards — both
 found by failing, card #39, September 28, 2026).
 
+Before starting a GPT lane, add the launcher, zero limits, finite timeout, and exported
+sandbox from [codex.md](docs/codex.md); the generated short config defaults to Claude.
 Then commit and push `projects/<name>.env` (the script writes it but does not push it), and
 paste `templates/project-CLAUDE.md`'s section into the project's own `CLAUDE.md` — it is
 built from what `/watch`, `/triage` and the reviewer actually read out of a project's
-`CLAUDE.md`, with a blank for each one. Give the project a `docs/board.md` from
+`CLAUDE.md`, with a blank for each one. Add an `AGENTS.md` pointing to it for Codex.
+Give the project a `docs/board.md` from
 `templates/board.md` — the script's closing lines print the `sed` that fills in the repo,
 the board's owner and its number — so a session told "file a card" or "take a look at #n"
 has the commands and the body shape in front of it instead of working them out from other
@@ -400,7 +386,8 @@ missing before you start the service), then `systemctl enable --now watcher@<nam
 launches — so a project that drifts out of shape after setup (a label deleted, Auto-add
 turned off) is refused, not silently worked wrong, the next time the service restarts.
 
-Nothing here is riffmap-shaped, but two settings are worth knowing before the first run:
+The `riffmap` lane names and numbered upstream cards in this README are worked
+examples from Steve’s installation, not configured services in this fork. Two settings are worth knowing before the first run:
 
 - **`PROJECT_REPO` is the repo to clone**, and the installer uses it. The instance name is
   a watcher-side label, so the repo may be named differently, and the board's owner need

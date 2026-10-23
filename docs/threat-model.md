@@ -1,115 +1,119 @@
-# Threat model
+# Threat model for the GPT/Codex runner
 
-What the box holds, what the bot account can and cannot do, why a tick runs with
-permissions skipped there and nowhere else, and what actually stops a bad PR from merging.
+Watcher is an autonomous coding loop with GitHub write access. Its controls reduce
+mistakes; they do not make an unattended model a trusted security principal. Use a
+dedicated, disposable runner and scope every credential to what it actually needs.
+A complete GPT pilot and live replay parity are still pending in this fork.
 
-## What the box holds
+## What the runner holds
 
-- A bot GitHub login (`gh auth login`, run once as the `watcher` user) — write access to
-  whatever repo you granted it, and whatever the board's owner granted it on the board.
-  Nothing on your own personal account.
-- A Claude **subscription** token, `CLAUDE_CODE_OAUTH_TOKEN` in `/etc/watcher/env` — never
-  an API key; that file is never allowed to carry `ANTHROPIC_API_KEY`, because the key
-  would outrank the login and bill your API account instead of spending the subscription's
-  own quota (`docs/how-it-works.md`, "The dollar figure is quota, not a bill").
-- Checkouts: one clone per project, plus one git worktree per card in flight.
-- Optionally, a Discord and/or Slack webhook URL — write-only, used only to post when a
-  card is stuck or something broke.
-- Nothing else. No keys to other hosts, no cloud credentials, no production secrets —
-  unless you put one there yourself, which this threat model assumes you never do (next
-  section).
+- A bot GitHub login, saved by `gh` **as watcher**. Its permissions are whatever you
+  granted the account/token: repository writes, issue/PR actions, and board access.
+  Keep administration on your own account; do not copy your personal token here.
+- A saved Codex ChatGPT login, managed by Codex in its native credential storage
+  (for example its auth file or configured credential store). Authenticate as the
+  same watcher user that runs the lanes. The adapter does not create or copy it.
+- Checkouts, card worktrees, state, result logs, and transcripts. The retained
+  `.claude/projects/` tree holds compatibility transcripts, not the Codex login.
+  Logs can contain private project data and command output; treat them accordingly.
+- Optional Discord/Slack webhook URLs in `/etc/watcher/env`, and any private inputs
+  deliberately supplied to a project. Do not commit credentials or webhook URLs.
 
-## Why permissions are skipped here, and nowhere else
+Keep production secrets, personal files, cloud administration credentials, and keys
+to other hosts off this box. Rebuilding it restores local state, not remote actions
+already taken with a compromised credential. Revoke affected credentials separately.
 
-Every tick runs `claude -p ... --dangerously-skip-permissions`. No confirmation prompt
-exists on the box; nothing a tick does waits on a human to approve it, mid-run.
+## Sandbox and unattended execution
 
-That is only safe because of what is, and is not, on the box:
+GPT lanes invoke `codex exec` with `approval_policy="never"`; no mid-run permission
+prompt can be answered. The adapter’s default sandbox is `workspace-write`.
+`WATCHER_CODEX_SANDBOX` can explicitly select `read-only` or `danger-full-access`.
+The accepted `--dangerously-skip-permissions` flag is legacy compatibility and does
+not choose the Codex sandbox.
 
-- **Is:** the two credentials above, and checkouts of code that is also on GitHub —
-  nothing here is the only copy of anything.
-- **Is not:** anything whose loss or misuse would actually cost something — a production
-  database, a cloud account, a payments key, your own GitHub token.
+A restricted trial can expose blocked git or network operations needed for a full
+workflow. `danger-full-access` permits broad local access on the runner. Use it only
+with an appropriate dedicated host and scoped identity. The host’s OS permissions,
+network policy, available tools, native configuration, and credentials determine
+what a tick can actually reach. A model instruction is not an OS restriction.
 
-If a tick ever does something wrong, the fix is "rebuild the box" — not "undo what it did
-to something valuable." On a developer's own laptop the same loop needs an allow-list, a
-trust probe and a classifier around every tool call instead, and the one time that was
-tried it cost more engineering time than the feature work it was meant to save. The
-throwaway box is the cheaper boundary, and it only works as long as the box stays
-throwaway.
+Lanes normally share the watcher OS identity and filesystem. A worktree, project
+file, or canary checkout is not isolation from another lane’s checkout or secrets.
+`CLAUDE_CONFIG_DIR` redirects compatibility state; it does not create an independent
+Codex credential store or isolate native Codex settings.
 
-**This is a one-way door.** Put a credential for anything else on this box — a production
-secret, a second project's deploy key, your own personal token — and the box stops being
-throwaway: a tick can now reach something worth protecting, unsupervised, with no prompt
-in its way. Don't add one. If a project needs to call something with real stakes, that
-call belongs in the project's own deploy pipeline, off this box, not in a tick.
+## Authentication, usage, and time bounds
 
-## What the bot account can do
+The adapter forces the OpenAI provider and ChatGPT login method and removes
+`OPENAI_API_KEY` and `CODEX_API_KEY` from its child’s environment. API-key login is
+not supported by this adapter. This is not removal of every possible project
+credential or a guarantee about billing for other programs run by the tick.
+ChatGPT account usage and access limits still apply.
 
-- Push a branch, open a PR, comment on a card or a PR, move a card on the board, merge its
-  own PR — but only once the gate below agrees to the merge.
-- Read anything its GitHub token can read: the repo it was granted, the board, issues and
-  PRs.
-- Spend Claude subscription quota, up to `TICK_MAX_BUDGET_USD` per tick (`bin/spawn.sh`,
-  default $15) — an imputed usage meter, not a bill (see above).
+GPT results report token usage and completed turns; `total_cost_usd` is **null**.
+There is no GPT dollar-equivalent or turn ceiling here. The two Claude-specific
+limits must explicitly be zero or the adapter refuses to start. Keep a finite
+`TICK_TIMEOUT`: the spawner’s process-group watchdog bounds the tick and child
+reviews. Direct helper invocations have no independent watchdog.
 
-## What it cannot do
+A project’s own API calls, deployment tools, or external services can incur charges
+or change remote data if their credentials are available. The watcher’s ChatGPT
+login and timeout are not caps on those actions. Inspect the project’s instructions
+and credentials before allowing a pilot.
 
-- **Merge without the gate below agreeing.** Merging is the one action something outside
-  the tick's own say-so actually checks.
-- **Reach anything that is not the repo it was granted, the board, and this box.** Not
-  your personal account, not your laptop, not another project's checkout.
-- **Spend real money on its own.** The watcher's own loop runs on the subscription only. A
-  *project* calling a model through its own API key is a separate, project-level choice
-  that project's own `CLAUDE.md` names — the watcher's quota ceiling says nothing about
-  that bill, and vice versa.
-- **Force-push, merge a red build, change `main`'s branch protection, or push directly to
-  `main`.** `commands/watch.md`'s hard rules forbid all four; the branch protection below
-  forbids them a second time, independently of whether the tick behaves.
+Legacy Claude lanes retain their original subscription-token/shim configuration
+and usage-equivalent caps; see [how-it-works.md](how-it-works.md). A Codex-only lane
+does not need `CLAUDE_CODE_OAUTH_TOKEN` merely to satisfy an installer reminder.
 
-## The gate — what actually stops a bad PR
+## What the bot can do
 
-Three independent things have to agree before any PR lands on `main` of a project set up
-the way this repo's own template means (both required checks below in place), and nothing
-the tick does can satisfy more than one of them:
+Within its actual permissions, a tick can read code, execute tools, edit files,
+push branches, open/comment on PRs and issues, move cards, and request merges.
+With broader sandbox access it may read other watcher-owned files and contact
+reachable services. Misuse can expose data, consume allowance, change remote
+resources, or leave unwanted branches/comments even if nothing merges.
 
-1. **Branch protection on `main`**, set by `deploy/add-project.sh` when the project was
-   added: the project's own required CI check must pass, and a PR is required (no direct
-   push to `main`). The bot account has no admin on the repo, so it cannot weaken this
-   setting even by mistake — only you, running `add-project.sh` as yourself, can change it.
-2. **The project's own required CI check** — whatever that project names as its one
-   required check.
-3. **The review receipt** (`bin/receipt-check.sh`, card #142) — a second, independent
-   required check, on this repo already. `deploy/add-project.sh` only ever sets up the
-   first check above for a *project this watcher works*; a forked project adds its own
-   `review-receipt` job the way `templates/project-CLAUDE.md` says, the first time it
-   gets a build lane. A code PR cannot merge without a `🤖 reviewer:` comment on that
-   exact PR naming its *current head commit* with a clean verdict (and a matching
-   `🤖 usability:` one, for any change to a screen). This check reads only the PR's own
-   comments and its own current head SHA — never anything the tick says about itself — so
-   an amend made after the review, or a review that simply never ran, fails this check
-   instead of merging silently.
+The workflow forbids force-push, direct pushes to `main`, `--admin`, red merges,
+secret access, and weakening gates. Branch protection can enforce some of these
+independently **when configured and applicable to the bot**, but prose alone cannot.
+Do not grant the bot an administrative bypass and call it protected.
 
-**The tick cannot forge the third one.** It can ask `agents/reviewer.md` to review its
-own change, and it can even disagree with what comes back — but the verdict comes from a
-separate review pass with no tools of its own beyond reading the diff, and
-`receipt-check.sh` only ever trusts what that pass actually posted on the PR, checked
-against the commit that is actually about to merge. A tick that skips the review, or whose
-branch moves after the review ran, cannot merge, regardless of what it claims in its own
-report.
+## Merge and deployment gates
 
-## What a misbehaving tick could actually do, worst case
+1. **Branch protection:** require PRs and the project’s actual build check on
+   `main`. `deploy/add-project.sh` configures this first check; verify the resulting
+   rules and the bot’s permissions on your repository.
+2. **Verification:** the project’s tests and the card’s Verify block must pass.
+   PR code can edit tests/workflows, so gate changes always get independent review.
+   Run untrusted PR checks away from the operational runner’s credentials.
+3. **Independent review and receipts:** the builder must obtain a separate
+   `reviewer` verdict, plus `usability` first for a screen change. Codex helpers use
+   read-only sandboxes and ignore user config; usability also disables shell tools
+   and runs in an empty directory with supplied screenshots. These controls are
+   not a blanket security boundary for arbitrary connectors or custom agent tools.
+   An unavailable required review stops merging.
+4. **Receipt check:** configure `review-receipt` as another required check. The
+   builder posts the reviewer’s returned verdict naming the current full head SHA.
+   `bin/receipt-check.sh` checks the required text and commit freshness. It rejects
+   stale or missing receipts; it does **not** cryptographically authenticate a
+   separate agent or prevent a malicious builder from fabricating matching text.
+   A genuine independent review remains a required workflow action. Adding this
+   gate to another project is a separate setup step; `add-project.sh` does not do it.
+5. **Deployment:** the existing deployer checks `verify` and the live replay suite
+   before release. The live harness is still Claude-specific; the GPT draft has
+   not completed replay parity. Keep unattended deployment off during the pilot.
+   Do not disable replay or use `deploy-anyway` to substitute for GPT validation.
 
-- Push branches, open PRs nobody asked for, leave noisy comments, move cards around the
-  board. All of it is visible — every PR, every comment, the floor page — and all of it is
-  reversible: delete the branch, close the PR, move the card back.
-- It cannot merge any of that without all three gates above agreeing, and it cannot touch
-  anything that is not this box, the repo it was granted, and the board.
+These gates catch errors and stale evidence under the workflow’s trust assumptions.
+They are not three unforgeable, independent security principals. Review gate changes
+closely, keep operational credentials out of CI, and verify protection on the real
+repo before enabling unattended work.
 
 ## Further reading
 
-- `commands/watch.md` — the tick's own rules, in full.
-- `docs/how-it-works.md`, "Hard rules for every agent" and "The dollar figure is quota, not
-  a bill".
-- `bin/receipt-check.sh` — the review-receipt check, in full.
-- `deploy/add-project.sh` — what branch protection it actually sets.
+- [GPT adapter contract and limits](codex.md)
+- [Pilot setup](getting-started.md)
+- [Architecture and hard rules](how-it-works.md)
+- [Tick workflow](../commands/watch.md)
+- [Receipt implementation](../bin/receipt-check.sh)
+- [Project setup implementation](../deploy/add-project.sh)

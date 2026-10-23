@@ -1,6 +1,7 @@
 # Run Watcher with GPT through Codex
 
-This fork adds an opt-in OpenAI Codex backend. Claude remains the default. The
+This fork documents GPT/Codex as the setup path. The runtime still defaults to Claude
+unless each project explicitly selects the adapter. The
 adapter uses the existing `WATCHER_CLAUDE` launcher override; no board polling,
 claim handling, retry, review receipt, or merge gate is replaced.
 
@@ -37,17 +38,22 @@ not supported by this adapter.
 
 ## Select Codex for a project
 
-Create the project's ordinary board configuration as described upstream. Append
-[example-codex.env.txt](../projects/example-codex.env.txt) to that project's env file,
-then choose an appropriate sandbox for the dedicated runner:
+Follow [getting-started.md](getting-started.md) to create the board and project file.
+Add the settings below to an existing project file, or copy the complete
+[example-codex.env.txt](../projects/example-codex.env.txt) starter and fill in its board
+and repo. Do not append the whole starter over an existing configuration:
 
 ```bash
-WATCHER_CLAUDE="$WATCHER_HOME/bin/codex-runner.py"
+WATCHER_CLAUDE="${WATCHER_HOME:-/opt/watcher}/bin/codex-runner.py"
 TICK_MAX_TURNS=0
 TICK_MAX_BUDGET_USD=0
 TICK_TIMEOUT=30
-export WATCHER_CODEX_SANDBOX=danger-full-access
+export WATCHER_CODEX_SANDBOX=workspace-write
 ```
+
+The fallback `/opt/watcher` is necessary because the installer sources project files
+before `WATCHER_HOME` is set. Change it for a custom installation path. During a tick,
+`WATCHER_HOME` keeps the adapter pinned to the actual release.
 
 `danger-full-access` grants the tick broad local access, as the original Claude loop
 has on its disposable box. The adapter defaults to `workspace-write`; that mode can
@@ -71,6 +77,10 @@ Canary lanes use the same release-pinned adapter through `WATCHER_HOME`. Command
 come from `.claude/commands/<name>.md` in the project first, then the release's
 `commands/`. Keeping those paths lets the existing projects work with both providers.
 The adapter explicitly tells Codex to read project `AGENTS.md` and `CLAUDE.md`.
+`CLAUDE_CONFIG_DIR` redirects canary compatibility transcripts; it does not isolate
+Codex authentication or native configuration. Project command overrides can still
+win, so review them for provider-specific behavior. YAML `model: opus` in retained
+agent files is Claude metadata and is stripped, not a GPT model selection.
 
 ## Reviews and logs
 
@@ -121,6 +131,10 @@ Run the offline contract tests without credentials or network:
 ```bash
 python3 bin/test-codex-runner.py
 ```
+
+GitHub CI passed for the initial adapter revision. Codex CLI 0.164.0 accepted the
+launcher flags and reported ChatGPT sign-in, but the authenticated smoke attempt
+timed out without a completed model response. No live GPT workflow is claimed.
 
 They cover command overrides, subscription-only invocation, success/failure event
 handling, existing transcript readers, token accounting, reviewer separation,

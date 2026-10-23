@@ -1,8 +1,18 @@
 # watcher
 
-A headless Claude Code loop that turns a GitHub Projects board into merged PRs. Read
+A board-to-PR loop with an opt-in GPT/Codex adapter in this fork. The runtime still
+defaults to Claude until a project selects the adapter. `AGENTS.md` routes Codex here;
+this filename remains the maintained rules entry point for both providers. Read
 `docs/how-it-works.md` before changing anything here; it is the map. Read
 `docs/talking-to-the-owner.md` before writing any text a human will read.
+
+## GPT integration status
+
+Read `docs/codex.md` for ChatGPT login, exported model/sandbox settings, zero
+Claude-specific limits, separate review helpers, and compatibility transcripts.
+Run `python3 bin/test-codex-runner.py` after adapter changes. Offline coverage and
+CI do not establish live behavior: a completed GPT pilot and GPT replay parity
+remain pending. Do not deploy this draft integration or bypass a gate to enable it.
 
 ## Layout
 
@@ -83,7 +93,9 @@ A headless Claude Code loop that turns a GitHub Projects board into merged PRs. 
   exact head commit with a clean verdict, and a screen change needs a matching
   `🤖 usability:` one too. Independent of the tick that opened the PR — it reads only the
   PR's own comments and its own current head SHA — so an amend after the review, or a
-  review that never ran, fails it instead of merging silently. Required alongside `verify`
+  stale receipt fails it. It verifies the receipt text and SHA, not the origin of a
+  model review; see `docs/threat-model.md`. A genuine separate review remains required.
+  Required alongside `verify`
   in `.github/workflows/ci.yml`'s `review-receipt` job. `bash bin/test-receipt.sh` is its
   offline suite (CI runs it); run it after touching the file.
 - `templates/` — what a project copies in: `project-CLAUDE.md` (the section its `CLAUDE.md`
@@ -126,6 +138,11 @@ A headless Claude Code loop that turns a GitHub Projects board into merged PRs. 
   "done" is `bin/hygiene.sh` exiting 0 on `main` (by hand, that needs `GITHUB_REPOSITORY`
   exported, or `--no-remote`). README, "The weekly hygiene card".
 
+The live replay instructions above describe the retained Claude harness. GPT lanes
+reject its nonzero per-case turn/dollar flags; the harness is not yet a GPT parity
+suite. Record unavailable live validation honestly, keep the PR draft, and retain
+the gate. `bin/test-eval-cases.sh` checks fixtures, not model compliance.
+
 ## Rules for editing this repo
 
 - **Anything the owner reads follows `docs/talking-to-the-owner.md`.** That includes the
@@ -159,7 +176,12 @@ A headless Claude Code loop that turns a GitHub Projects board into merged PRs. 
 
 ## When the watcher works its own board
 
-The `watcher@watcher` lane (`projects/watcher.env`) works the
+The following is the upstream installation’s worked example, not a running lane or
+board provisioned by this fork. Replace its live config before installation. Once
+your own deployment is configured and validated, the same worktree and gate rules
+apply.
+
+The upstream `watcher@watcher` lane (`projects/watcher.env`) works the
 [Watcher board](https://github.com/users/roloc/projects/2) with this repo as its project, so
 a tick on that board reads this file as the project's `CLAUDE.md`. On top of everything
 above:
@@ -178,10 +200,10 @@ above:
   directories and `journalctl -u 'watcher@*'` is fine, and it is how a card about the loop's
   behavior goes and looks instead of asking (`watch.md`: a fact is not a product decision).
 - **Deploying is the deployer's, never yours.** A merge goes live by itself, for *every*
-  project on the box, the next time all lanes are idle — after `verify` and, when the change
+  project on the box through the release pointer — after `verify` and, when the change
   touches what a model reads, the replay suite pass on it (`deploy/autodeploy.sh`). So the
-  PR body and the Done comment say, in plain words, that it goes live on its own once the
-  lanes are idle, and flag anything that changes how every lane behaves (`commands/`,
+  PR body and the Done comment say, in plain words, that each lane follows the release
+  at its next idle poll, and flag anything that changes how every lane behaves (`commands/`,
   `agents/`, `bin/spawn.sh`).
 - **The owner can open three things: the board, the Discord channel, and the floor page —
   all from their phone.** They do not ssh. So a card that asks for a way to *see*, *watch*,

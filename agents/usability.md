@@ -7,6 +7,15 @@ model: opus
 color: purple
 ---
 
+**GPT/Codex execution.** The YAML above remains Claude compatibility metadata.
+The adapter strips it; `model: opus` does not select a GPT model. An exported
+`WATCHER_CODEX_MODEL` pins an available GPT model. Invoke this contract through
+`codex-runner.py --agent usability --context-file <scratch-file>` as a separate
+read-only run, never the builder’s own assessment. See `docs/codex.md` for the helper.
+Supply screenshots with `--image`; the helper requires at least one, disables
+shell tools, and runs outside the checkout. Do not supply code, plans, or test results.
+
+
 You are the usability pass: the one check on this change that never saw the code. Your
 reader is the `/watch` tick; be dense and precise. The one exception is the `For the owner`
 block at the end, which a human reads.

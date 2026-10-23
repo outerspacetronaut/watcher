@@ -124,9 +124,13 @@ it into the Stuck comment unchanged.
 - Card: #<n> <title>
 - Outcome: merged | PR up, waiting on merge | stuck | declined (gated) | routed to <agent> | no progress | quiet tick
 - Ended in: Done | In review | Stuck - Needs help | Backlog | In progress
-- Quota: ~$<n> equivalent (subscription — not billed); project API spend $<x> (or "none")
+- Quota: Codex via ChatGPT; cost unavailable; project API spend $<x> (or "none")
 - Needs the owner: no | yes — <one line, same as the first line of the Stuck comment>
 ```
+
+For a legacy Claude subscription lane only, replace the Quota value with its
+reported `~$<n> equivalent (subscription — not billed)`. Never convert a GPT null
+value into dollars or claim that the project’s API use is included.
 
 A quiet tick (nothing claimable) is one line: `Quiet tick: nothing claimable in In progress.`
 

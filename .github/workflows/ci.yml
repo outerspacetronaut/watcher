@@ -11,11 +11,11 @@ name: CI
 # and must be given nothing.
 #
 # WHERE it runs follows riffmap's split (its ci.yml, card #407): PR code is code any branch
-# can write, so it never runs on a box that holds credentials. Here that rules out exactly
-# one box — the `agents` LXC this repo deploys to, which holds the bot's GitHub login and a
-# Claude subscription token. The repo variable `CI_RUNNER` picks the runner: since
-# September 28, 2026 it is `watcher-ci`, a runner on the `ci` LXC (108) registered to THIS
-# repo — Steve's lab, not GitHub's metered minutes. A runner registered to another repo
+# can write, so it never runs on a box that holds credentials. That rules out
+# the operational runner, which holds the bot GitHub login and saved model credentials.
+# The repo variable `CI_RUNNER` picks a dedicated CI runner. Upstream uses `watcher-ci`
+# in Steve's lab; this fork uses GitHub-hosted execution unless configured otherwise.
+# A runner registered to another repo
 # (`riffmap-ci`) never picks up this repo's jobs, because repos in a user account cannot
 # share runners: pointing at it queues every check forever. Unset the variable to fall back
 # to GitHub-hosted if the ci box is down. Never set it to the agents box.
@@ -23,8 +23,8 @@ name: CI
 # Deploying is NOT here and should not be. A deploy job would need a runner on the agents
 # box, which is exactly the box PR code must never reach. Instead this job's result is the
 # first thing the box's own deployer reads (deploy/autodeploy.sh): it ships a main commit
-# only when `verify` passed on it, then only when every lane is idle. CI decides whether a
-# commit may ship; the box decides when.
+# only when `verify` and its live replay gate passed. Lanes follow the release at their
+# next idle poll. GPT live replay parity is still pending; do not bypass it for this draft.
 
 on:
   pull_request:
@@ -111,7 +111,8 @@ jobs:
 
   # Card #142: a code PR used to merge on the tick's own say-so that `reviewer` ran — CI
   # had no way to see whether it actually had, or whether the branch was amended after.
-  # This job is the independent half: it never trusts the tick, only the PR's own comments
+  # This job checks receipt text and freshness, not the identity of a reviewing model.
+  # The builder posts the genuine returned verdict. It reads the PR's own comments
   # and its own current head commit. It runs as its own job (not a `verify` step) so it
   # reports as its own named check, becomes a required check in branch protection
   # alongside `verify` (a repo setting — Settings → Branches — not something this file can
@@ -121,7 +122,7 @@ jobs:
   # It runs independently of `verify`, not after it, and finishes in seconds — reading a
   # few PR comments, nothing it builds or tests — so on an ordinary push it concludes
   # (red: no receipt posted yet) long before `verify` does. `commands/watch.md` §3 is what
-  # turns it green: once `reviewer` posts its receipt comment, the tick reruns this job
+  # turns it green: once the tick posts the returned reviewer verdict, it reruns this job
   # (`gh run rerun --failed`) against the same commit and waits for it again. A docs-only
   # PR that touches no part of the merge gate is exempt — `bin/receipt-check.sh` says so
   # itself and exits 0 on the first run, never red at all.

@@ -4,15 +4,34 @@ Written for the agents that run inside it. Read this once before touching a card
 review, or this repo. If you are reading it as a human, `docs/owner-cheat-sheet.md` is the
 short version.
 
+## GPT/Codex in this fork
+
+The documented setup uses `bin/codex-runner.py` through `WATCHER_CLAUDE`; leaving
+that override unset still runs the legacy Claude default. Read [codex.md](codex.md)
+for the adapter, ChatGPT login, sandbox, zero legacy limits, and pending live
+validation. This is a draft integration, not an already deployed GPT service.
+
+| Retained name | Meaning on a GPT lane |
+|---|---|
+| `WATCHER_CLAUDE`, `print_claude_cmd`, dry-run's `claude command` | launcher compatibility interface, pointing to the Codex adapter |
+| `CLAUDE.md` | maintained project rules; `AGENTS.md` directs Codex to them |
+| `.claude/commands/`, `.claude/agents/` | project contract overrides, read by the adapter |
+| `.claude/projects/`, `CLAUDE_CONFIG_DIR/projects/` | compatibility transcripts, not Codex credentials |
+| `model: opus` in YAML frontmatter | legacy Claude metadata; stripped by the adapter, not a GPT model pin |
+
+The board, routing, retries, CI, receipts, and merge rules below are shared. Examples
+naming Steve’s boards, `riffmap`, or old numbered incidents describe upstream history;
+they do not configure this fork. Never use an upstream live project file unchanged.
+
 ## Who is who
 
 | Piece | File | Runs as | Job |
 |---|---|---|---|
-| **Spawner** | `bin/spawn.sh` | a systemd unit, plain bash, no Claude session | polls the board once a minute, starts one tick at a time in its lane, sweeps stale claims, parks cards that fail twice |
-| **Tick** | `commands/watch.md` (`/watch`) | `claude -p`, permissions skipped, in the card's worktree | claims one card, does the work, opens the PR, merges it or parks the card |
-| **Triage tick** | `commands/triage.md` (`/triage`) | `claude -p`, permissions skipped, in the main checkout | puts the one `agent:` label on a card that has none and records what it waits on; never does the work |
-| **Reviewer** | `agents/reviewer.md` | a subagent the tick calls once | the last review a change gets; blocking findings only |
-| **Usability** | `agents/usability.md` | a subagent the tick calls once, on a screen change only, before `reviewer` | a second read-only pass that never sees the code: only the card's ask and the PR's pictures, blocking when the person the card names could not do the thing from a phone shot |
+| **Spawner** | `bin/spawn.sh` | a systemd unit, plain bash, no model session | polls the board once a minute, starts one tick at a time in its lane, sweeps stale claims, parks cards that fail twice |
+| **Tick** | `commands/watch.md` (`/watch`) | Codex adapter → `codex exec`, in the card’s worktree | claims one card, does the work, opens the PR, merges it or parks the card |
+| **Triage tick** | `commands/triage.md` (`/triage`) | Codex adapter → `codex exec`, in the main checkout | puts the one `agent:` label on a card that has none and records what it waits on; never does the work |
+| **Reviewer** | `agents/reviewer.md` | a separate review run the tick calls once | the last review a change gets; blocking findings only |
+| **Usability** | `agents/usability.md` | a separate review run the tick calls once, on a screen change only, before `reviewer` | a second read-only pass that never sees the code: only the card's ask and the PR's pictures, blocking when the person the card names could not do the thing from a phone shot |
 | **Board CLI** | `bin/board.py` (`board` on the box) | called by both of the above | `list`, `show`, `move`, `unclaim` against the GitHub Projects board |
 | **Worktrees** | `bin/worktree.sh` | called by the spawner | one worktree per card beside the main checkout; copies private inputs in |
 | **Discord** | `bin/notify.py` | imported by the board CLI, and by `bin/metrics.py --post` | posts to the owner's channel when a card is stuck, something broke, or the Monday digest is due, and for nothing else — when a webhook is configured |
@@ -21,9 +40,10 @@ short version.
 | **A browser** | `bin/browse.py` | run by a tick or by hand | headless Chrome, for looking at a page the way its reader does: `check` (did the page's own code fail?), `text`, `shot`. `curl` fetches what the server sent; a page that draws itself is only seen by running it |
 | **The owner** | a human | GitHub, on their phone | moves cards, answers Stuck cards, owns every product decision |
 
-One human owns the board. Everything else is a bot. The box the bots run in is throwaway
-and holds nothing worth protecting beyond a bot GitHub login and a Claude token, which is
-why the tick can run with permissions skipped.
+One human owns the board. Everything else is a bot. Ticks run without interactive
+approvals on a dedicated runner with a scoped GitHub identity and a saved ChatGPT
+login. Sandbox permissions and configured credentials determine their actual reach;
+see [threat-model.md](threat-model.md).
 
 ## The board
 
@@ -168,8 +188,12 @@ queries. `--interval 60` is the fix there — the same wait, a tenth of the poin
    cards — the top row of **Ready**, which it moves to In progress before launching, so
    Status stays truthful and the floor page shows the card starting. See "Self-pull" below.
 3. **A worktree** `../<repo>-worktrees/card-<n>` is created (or reused) on branch `card-<n>`.
-4. **The tick starts:** `claude -p "/watch <n>" --dangerously-skip-permissions --max-turns 400
-   --max-budget-usd 15`, with a 150 minute watchdog that kills the whole process group.
+4. **The tick starts:** the configured launcher receives `-p "/watch <n>"`. A GPT
+   project points it to `codex-runner.py`, explicitly sets both legacy limits to 0,
+   and keeps a finite watchdog (30 minutes in the GPT starter). The adapter expands
+   the command and runs `codex exec`; the watchdog kills the whole process group.
+   An unmodified legacy project instead uses Claude’s 400-turn/$15-equivalent
+   defaults and the spawner’s 150-minute default. These are not GPT limits.
 5. **The tick** claims the card (comment first, label second), reads the card and the
    project's `CLAUDE.md`, does the work, opens a PR with `Closes #<n>`, waits for CI, runs
    the reviewer once, merges. Or it moves the card to In review, or Stuck, or labels it
@@ -286,16 +310,18 @@ that takes every card — nothing about it changed.
 A lane's project file can also set **`LANE_COMMAND`** (the slash command its tick runs,
 default `/watch`) and **`LANE_WORKDIR`** (`card`, the default, runs the tick in a worktree
 made for the card; `root` runs it in the main checkout with no worktree). The triage lane
-is `LANE_COMMAND=/triage LANE_WORKDIR=root` with a small turn and dollar cap.
+is `LANE_COMMAND=/triage LANE_WORKDIR=root`. For GPT it inherits the adapter, zero
+legacy limits, and finite timeout from its project file. Legacy Claude lanes can use
+smaller turn/dollar-equivalent caps; those caps cannot be applied to Codex.
 
 **`LANE_CHANNEL=canary`** (card #46) makes a lane run the watcher's own **second**
 checkout, `/opt/watcher-canary`, instead of the one every other lane shares — so a bad
 prompt reaches only the board that opted in before it reaches everyone else. `bin/spawn.sh`
 itself carries the mechanism: right after it reads the lane's project file, a canary lane
 re-execs into `/opt/watcher-canary/bin/spawn.sh` with its own `CLAUDE_CONFIG_DIR` (so a
-personal or project `commands/`/`agents/` cannot win over the checkout under test, the same
-trick `bin/eval.sh` uses) and a freshly-computed `WATCHER_HOME`. That config dir is also
-where the CLI writes the canary lane's session transcripts (`<dir>/projects/`, not
+personal config does not win over the checkout under test on the legacy Claude
+path, the same trick `bin/eval.sh` uses) and a freshly-computed `WATCHER_HOME`. That config dir is also
+where the legacy CLI or Codex adapter writes compatibility session transcripts (`<dir>/projects/`, not
 `~/.claude/projects`), so `bin/tail.py` — and with it `bin/tail.sh` and the floor page's
 Peek — looks under both and takes the newest session for the card (card #164; before it,
 Peek on the canary lane said "waiting" for the whole tick). Same systemd unit, same
@@ -305,7 +331,10 @@ is which checkout's code it is actually running. `deploy/autodeploy.sh`'s own he
 comment documents the canary stage: it moves that second checkout onto a commit and
 decides when the soak is done, restarting only the canary lane(s) until it clears; a
 project with no canary lane is entirely unaffected. `projects/watcher.env` is the first
-one to opt in (see "The watcher's own board", below).
+one to opt in upstream (see "The watcher's own board", below). On GPT lanes this
+variable does not isolate Codex authentication or native config, and project-level
+`.claude/commands/` or `.claude/agents/` overrides still win in the adapter. Audit
+those explicitly when testing a canary release.
 
 **`/opt/watcher-canary` is cloned locally from `/opt/watcher`, never from GitHub over
 HTTPS** (card #120): `deploy/install.sh` makes it the same way `deploy/autodeploy.sh`'s own
@@ -339,7 +368,8 @@ for (design-shaped asks — options, examples, mockups, a brief, a decision — 
 or `architect`; a bug, a removal or a change to an approved design to the build agent for
 that area), records which cards it waits on (below), leaves an FYI comment, and stops.
 The lane that label names picks the card on its own next poll. A triage never claims the
-card, never touches a file, and uses cents' worth of quota. A card it cannot place goes to Stuck with the
+card, never touches a file, and aims to keep model usage small. No GPT dollar
+equivalent is available. A card it cannot place goes to Stuck with the
 candidate agents as the lettered options. The spawner reads the relabel as a success for
 the triage lane (the card is In progress but no longer its to pick), so nothing counts
 toward an attempt.
@@ -362,6 +392,9 @@ tick that keeps retrying the same failing thing inside one run is wasting the bu
 Stuck instead. The owner moving a parked card back to In progress resets the count to zero.
 
 ## The watcher's own board
+
+This section describes the upstream installation. This fork has not provisioned a
+board or deployed GPT lanes. Substitute your own board/config before using it.
 
 The watcher is also a project: `watcher@watcher` (`projects/watcher.env`) is one lane,
 with no `LANE_AGENTS`, over the [Watcher board](https://github.com/users/roloc/projects/2)
@@ -517,42 +550,44 @@ In progress or Waiting. `READY_PULL=1` in a project file makes **Ready** a third
 - **The tick is unaffected.** It is still handed exactly one card and still never pulls
   from Ready itself; choosing the card is the spawner's job, as it always was.
 
+## GPT usage and limits
+
+GPT lanes require Codex’s saved ChatGPT sign-in **as watcher**. The adapter forces
+the OpenAI provider and ChatGPT login method and removes inherited `OPENAI_API_KEY`
+and `CODEX_API_KEY` before launching the child. It does not authenticate a project’s
+own tools or remove every possible credential from that project.
+
+Codex results set `total_cost_usd` to **null**, not zero. There is no subscription
+dollar equivalent or enforced GPT turn/dollar ceiling in this adapter. Both legacy
+caps must be explicitly zero, or launch fails. Keep `TICK_TIMEOUT` finite; the
+spawner’s watchdog bounds the builder and its child reviews together. Direct helper
+runs need their caller to impose a time bound.
+
+Report `Quota: Codex via ChatGPT; cost unavailable` and actual token/turn usage when
+known. Completed Codex turns are not comparable to Claude assistant turns. Cached
+input is separated from ordinary input in the normalized result to avoid counting
+it twice. Existing metrics may retain dollar-oriented labels; those labels do not
+make a missing GPT dollar value meaningful. Use raw `usage` for GPT token counts.
+Account usage limits follow the saved login. Project API calls are separate: inspect
+that project’s backend and spend controls rather than inferring them from the tick.
+
 ## The dollar figure is quota, not a bill
 
-**Nobody is invoiced for a tick.** The box authenticates with `CLAUDE_CODE_OAUTH_TOKEN`
-— a Claude **subscription** login — and `/etc/watcher/env` is forbidden from carrying
-`ANTHROPIC_API_KEY`, precisely because the key would outrank the login and bill the API
-instead (`README.md`, "Set up a box", step 1).
+**Legacy Claude subscription lanes only.** The original configuration authenticates
+with `CLAUDE_CODE_OAUTH_TOKEN` in `/etc/watcher/env` and forbids `ANTHROPIC_API_KEY`
+there, because an API key can select separately billed API use. Its CLI may report
+`total_cost_usd`, a token-based API-price equivalent, and accept
+`--max-budget-usd` as a usage ceiling. On that backend, report
+`Quota: ~$<n> equivalent (subscription — not billed)` only when a real numeric value
+was returned. Do not reuse that template for GPT or turn null into $0.
 
-The same login reaches what a tick runs **from its shell**. Claude Code strips
-`CLAUDE_CODE_OAUTH_TOKEN` from the environment of every Bash tool call, so until October 8,
-2026 a `claude` the tick ran itself — a project's pipeline on the subscription backend, a
-`claude -p` probe, an eval's before/after — answered `Not logged in · Please run /login`
-while the tick around it was logged in, and every card whose work needed such a run parked
-itself in Stuck as "this box isn't logged into the model" (riffmap#602; watcher#82). Now
-`bin/spawn.sh` puts `bin/shim/claude` first on the tick's `PATH`: when the variable is
-missing it re-reads **only** the token from `/etc/watcher/env` (a file the watcher user could
-already read) and execs the real binary, resolved by the spawner before the shim's directory
-went on `PATH` so it can never find itself. A tick needs to do nothing — `claude` just works.
+The original `bin/shim/claude` restores the subscription token for nested Claude
+shell calls. It remains compatibility machinery, not a migration of arbitrary
+project `claude` commands into Codex. Validate provider-specific project pipelines
+separately. This fork’s GPT setup requires no Claude token.
 
-So every dollar amount the loop reports is **imputed**: `total_cost_usd` in a tick's JSON
-result is copied from `modelUsage.<model>.costUSD`, which is **tokens × API list price,
-computed client-side**. It is what the run *would* have cost on the API. It is a **usage
-meter denominated in dollars**, and the subscription is what actually paid.
-
-`--max-budget-usd` is the same number as a ceiling. It is still worth having — it stops a
-tick that is looping — but it is a **quota ceiling, not a spending limit**.
-
-**Say "quota", never "cost" or "spend", for this number.** A tick reports
-`Quota: ~$<n> equivalent (subscription — not billed)`. The words *cost*, *spend* and
-*money* are reserved for the one thing that can really be billed: **a project calling a
-model on its own API key**, through its own env file. That is a separate bill with no
-enforced cap, and a project whose lane pins a subscription backend (riffmap pins
-`RIFFMAP_BACKEND=claude`) has no such path at all.
-
-Why this is written down: the loop's own reports said "cost" and "spend" for two months,
-and everything reading them — agents and humans alike — repeated it back to the owner as
-money they had been charged (September 19, 2026). The number was never a bill.
+For either provider, the project’s own model API use can be separately billed. The
+watcher’s usage report is not a project spend cap or a promise of zero charges.
 
 ## State on disk
 
@@ -571,9 +606,9 @@ money they had been charged (September 19, 2026). The number was never a bill.
 | `waiting/<n>` | the FYI comment saying what card n waits on was posted, and for which blockers; cleared when it is picked |
 | `awaiting-rebuild/<n>.since` | when a card first carried `awaiting-rebuild` was seen (the stale-label sweep's clock); cleared when it is picked normally or parked for staleness |
 | `awaiting-rebuild/<n>.noted` | the one FYI comment for that wait was posted; cleared the same way |
-| `logs/card-<n>-<ts>.json` | the tick's JSON result: `subtype`, `total_cost_usd` (quota, not a bill — see above), `num_turns`, `result` |
+| `logs/card-<n>-<ts>.json` | the tick's JSON result: `subtype`, `total_cost_usd` (null for Codex; legacy equivalent only when reported), `num_turns`, `result` |
 | `logs/card-<n>-<ts>.stderr` | the tick's stderr |
-| `logs/card-<n>-<ts>.transcript.jsonl` | only on a non-`success` exit (card #143): a copy of the dead tick's own Claude Code session transcript, same stem as the `.json`/`.stderr` above. Over 50MB, the source path is written here instead of the content. Never written on a successful tick |
+| `logs/card-<n>-<ts>.transcript.jsonl` | only on a non-`success` exit (card #143): a copy of the dead tick's own session transcript (normalized compatibility JSONL for Codex), same stem as the `.json`/`.stderr` above. Over 50MB, the source path is written here instead of the content. Never written on a successful tick |
 
 ## How a tick ends
 
@@ -588,8 +623,12 @@ money they had been charged (September 19, 2026). The number was never a bill.
 | In progress, with ANOTHER lane's label | removed | success: the tick relabeled it for that lane (a triage, or `/watch` routing a design card); attempts reset, the other lane starts its own count |
 | any | still there | the tick died; the spawner unclaims, comments, attempts +1 |
 
-`claude -p` result subtypes the spawner reads: `success`; `error_max_turns`;
-`error_max_budget_usd`; `error_during_execution`; a killed tick shows exit 143.
+The Codex adapter emits `success` or `error_during_execution`. A missing completed
+turn/result, malformed stream, failed turn, or nonzero exit fails closed. Legacy
+Claude also emits `error_max_turns` and `error_max_budget_usd`. A killed tick may
+show exit 143. Codex raw events and normalized progress are streamed under the
+compatibility transcript tree; child reviews go into `reviews/` so Peek still
+selects the builder. See [codex.md](codex.md) for paths and result semantics.
 
 ## Discord
 
@@ -682,8 +721,8 @@ same way the deployer closes its own: a small script on a timer, no model, deter
   is the spawner's decision, including when it takes one from Ready.
 - Never force-push, never merge red, never push `main` directly, never `--admin`, never
   touch a project's secrets, never relax a hard rule to make a card pass.
-- Never wait on an external reviewer. There is none. The reviewer runs in the session and
-  returns.
+- Never wait on an external reviewer. There is none. The reviewer is called by the tick and returns
+  (a separate read-only Codex run for GPT); it must not be the builder self-reviewing.
 - Remove `in-flight` on every exit. A leaked label strands the card.
 - A product decision is the owner's. Do not guess it; park the card with the options laid out.
 - **A fact is not a product decision.** What drew, what the value was, whether it
@@ -721,8 +760,9 @@ same way the deployer closes its own: a small script on a timer, no model, deter
   real result instead of a promise. A PR with no verify record, or one whose output shows
   a non-zero exit, is blocking for `reviewer`, the same category as weakening the merge
   gate.
-- Report the run's quota use, and never call it cost or spend (see "The dollar figure is
-  quota, not a bill").
+- Report the actual provider’s usage. For GPT, say `Codex via ChatGPT; cost
+  unavailable`; never invent a dollar equivalent. The legacy Claude equivalent,
+  when reported, is quota rather than a project API bill (see usage sections above).
 
 ## What a project brings, what the watcher brings
 
@@ -741,7 +781,9 @@ project".
 
 Deploying a new watcher version happens by itself: `watcher-deploy.timer` runs
 `deploy/autodeploy.sh`, which ships `main` when `verify` and the replay suite pass on the
-commit and every lane is idle (README, "Deploys happen by themselves"). A held commit is a
+commit; each lane follows the release at its next idle poll (README, "Deploys happen
+by themselves"). GPT live replay parity remains pending, so this is not yet a
+validated GPT deployment path. A held commit is a
 Stuck card on the Watcher board. `deploy/rollout.sh` is the manual fallback for a session;
 it stops the deployer's timer while it runs. Neither ever signals a tick. The watcher's own files live at `/opt/watcher` on the box; the spawner exports that path to
 the tick as `WATCHER_HOME`, so `cat "$WATCHER_HOME/docs/talking-to-the-owner.md"` works from
