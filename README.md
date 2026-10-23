@@ -1,5 +1,9 @@
 # watcher
 
+**GPT / OpenAI Codex support in this fork:** an opt-in launcher adapter keeps the
+existing board loop and Claude default. See [Run Watcher with Codex](docs/codex.md)
+for ChatGPT sign-in, project configuration, tests, and current validation limits.
+
 A headless Claude Code loop that turns a GitHub Projects board into merged pull requests.
 One throwaway box, one systemd unit per project, no permission prompts.
 **New here?** `docs/getting-started.md` is fork to first merged card, in an afternoon;

@@ -57,6 +57,9 @@ jobs:
       - name: The spawner suite
         run: bash bin/test-spawn.sh
 
+      - name: The Codex adapter suite (offline)
+        run: python3 bin/test-codex-runner.py
+
       - name: The deployer suite
         run: bash bin/test-deploy.sh
 
